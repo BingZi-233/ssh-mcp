@@ -54,7 +54,7 @@ claude mcp add ssh -- node /绝对路径/ssh-mcp/dist/index.js
 
 ## 配置服务器
 
-默认从 `~/.ssh-mcp/servers.json` 读取（可用环境变量 `SSH_MCP_CONFIG` 指定别的路径）。参考 `servers.example.json`：
+默认从**运行目录下的 `./servers.json`** 读取（即 Claude 启动 MCP 服务器时所在的工作目录，通常是你当前的项目根目录）。也可用环境变量 `SSH_MCP_CONFIG` 指定任意路径。参考 `servers.example.json`：
 
 ```json
 {

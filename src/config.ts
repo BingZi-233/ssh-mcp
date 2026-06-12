@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 /** 一台远程服务器的配置。name 是模型用来区分服务器的唯一标识。 */
 export interface ServerConfig {
@@ -24,10 +24,10 @@ export function expandHome(p: string): string {
   return p;
 }
 
-/** 配置文件路径：优先环境变量 SSH_MCP_CONFIG，否则取 ~/.ssh-mcp/servers.json。 */
+/** 配置文件路径：优先环境变量 SSH_MCP_CONFIG，否则取运行目录下的 ./servers.json。 */
 export function configPath(): string {
   const fromEnv = process.env.SSH_MCP_CONFIG;
-  return fromEnv ? expandHome(fromEnv) : join(homedir(), ".ssh-mcp", "servers.json");
+  return fromEnv ? expandHome(fromEnv) : resolve(process.cwd(), "servers.json");
 }
 
 /**

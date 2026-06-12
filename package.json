@@ -1,6 +1,6 @@
 {
   "name": "@bingzi-233/ssh-mcp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "通过 SSH/SFTP 让 AI 在多台远程服务器上执行命令并传输大文件（支持断点续传）的 MCP 服务器",
   "type": "module",
   "bin": {
