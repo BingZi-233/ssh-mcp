@@ -1,0 +1,43 @@
+# ===== 凭据：绝不提交真实服务器配置 =====
+servers.json
+*.local.json
+.env
+.env.*
+*.pem
+*.key
+id_rsa*
+
+# ===== 依赖与构建产物 =====
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# ===== 日志与调试 =====
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ===== 本地 Claude Code 配置，与本项目无关 =====
+.claude/
+
+# ===== 临时/测试产物 =====
+tmp-*
+*.bin
+test-*.mjs
+*.tmp
+coverage/
+
+# ===== 编辑器 / IDE =====
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ===== 操作系统垃圾文件 =====
+.DS_Store
+Thumbs.db
+desktop.ini

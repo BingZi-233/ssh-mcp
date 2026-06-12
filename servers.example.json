@@ -1,0 +1,27 @@
+{
+  "servers": [
+    {
+      "name": "prod-web",
+      "description": "生产环境 Web 服务器",
+      "host": "192.168.1.10",
+      "port": 22,
+      "username": "deploy",
+      "privateKeyPath": "~/.ssh/id_rsa",
+      "passphrase": "如果私钥有密码就填这里，没有就删掉这行"
+    },
+    {
+      "name": "db",
+      "description": "数据库服务器（用密码登录）",
+      "host": "db.example.com",
+      "port": 22,
+      "username": "admin",
+      "password": "your-password-here"
+    },
+    {
+      "name": "build",
+      "description": "CI 构建机（用本机 ssh-agent 登录，无需在此写凭据）",
+      "host": "build.internal",
+      "username": "ci"
+    }
+  ]
+}
