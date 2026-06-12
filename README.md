@@ -105,6 +105,10 @@ claude mcp add ssh -- node /绝对路径/ssh-mcp/dist/index.js
 - 给 SSH 账号最小权限；高危机器考虑用受限账号。
 - 内置命令安全策略会拦截 `rm -rf /`、`dd` 写块设备、`mkfs`、fork 炸弹等高危模式。可在 `security.blocked_patterns` 中追加自定义正则（JSON 字符串，需双重转义，如 `"rm\\\\s.*-rf?\\\\s+/\\\\*"`）。传 `force=true` 可绕过。
 
+## 社区
+
+本项目源自 [Linux.do](https://linux.do) 社区。
+
 ## License
 
 MIT © BingZi-233
