@@ -88,37 +88,6 @@ claude mcp add ssh -- node /绝对路径/ssh-mcp/dist/index.js
 
 ---
 
-## 发布到 npm（维护者）
-
-仓库已配置 GitHub Actions，推送 `vX.Y.Z` 形式的 tag 即自动发布到 npm。
-
-**一次性准备**：
-
-1. 在 npmjs.com 创建一个 **Automation** 类型的 Access Token。
-2. 把它加到仓库 Secrets：
-   ```bash
-   gh secret set NPM_TOKEN
-   ```
-   （或在 GitHub 网页 Settings → Secrets and variables → Actions 添加。）
-
-> 包名 scope `@bingzi-233` 必须是你拥有的 npm 用户名或组织。若不一致，改 `package.json` 的 `name` 与插件 `.mcp.json` 里的 `args`。
-
-**每次发版**：
-
-```bash
-# 1. 同步版本号（两处都改：npm 包与插件）
-#    - package.json 的 "version"
-#    - plugins/ssh-mcp/.claude-plugin/plugin.json 的 "version"
-# 2. 提交并打 tag
-git commit -am "release: v1.0.1"
-git tag v1.0.1
-git push && git push --tags
-```
-
-Actions 会自动 `npm ci && npm run build && npm publish`（带 provenance 来源证明）。
-
----
-
 ## ⚠️ 安全提示
 
 这个工具允许模型在你的服务器上执行**任意命令**、读写文件。请仅指向你拥有/授权的机器：
