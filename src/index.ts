@@ -2,7 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { configPath, loadServers } from "./config.js";
+import { configPath, loadSecurity, loadServers, validateCommand } from "./config.js";
 import {
   closeSession,
   listSessions,
@@ -112,6 +112,9 @@ server.registerTool(
       "用 server 参数指定目标服务器的 name（可先用 list_servers 查看）。" +
       "可选传入 session（长连接会话 id）复用已有 TCP 连接，省去重复握手和认证；" +
       "不传则每次新建连接、执行完即断开（短连接）。" +
+      "内置安全策略会拦截 rm -rf /、dd 写块设备、mkfs、fork 炸弹等高危命令，" +
+      "可在 servers.json 的 security.blocked_patterns 中追加自定义正则。" +
+      "传入 force=true 可绕过安全检查（需明确知道自己在做什么）。" +
       "注意：即便是长连接，每条命令仍在独立 channel 中执行，命令之间不保留工作目录或环境变量；" +
       "需要保持上下文时请自行串接，例如 `cd /var/www && git pull`。",
     inputSchema: {
@@ -129,10 +132,14 @@ server.registerTool(
         .string()
         .optional()
         .describe("长连接会话 id（由 open_session 返回）。不填则使用短连接。"),
+      force: z
+        .boolean()
+        .optional()
+        .describe("传入 true 跳过安全策略检查。请谨慎使用。"),
     },
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
   },
-  async ({ server: serverName, command, timeout_ms, session }) => {
+  async ({ server: serverName, command, timeout_ms, session, force }) => {
     let servers;
     try {
       servers = loadServers();
@@ -152,6 +159,17 @@ server.registerTool(
         ],
         isError: true,
       };
+    }
+
+    if (!force) {
+      const security = loadSecurity();
+      const blocked = validateCommand(command, security.blocked_patterns ?? []);
+      if (blocked) {
+        return {
+          content: [{ type: "text", text: `${blocked}\n使用 force=true 可跳过安全检查。` }],
+          isError: true,
+        };
+      }
     }
 
     try {

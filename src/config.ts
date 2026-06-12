@@ -17,6 +17,11 @@ export interface ServerConfig {
   password?: string;
 }
 
+export interface SecurityConfig {
+  /** 用户追加的拦截正则（JSON 字符串形式，需双重转义，如 "rm\\\\s.*-rf?\\\\s+/\\\\*"）。 */
+  blocked_patterns?: string[];
+}
+
 /** 把开头的 ~ 展开成用户主目录。 */
 export function expandHome(p: string): string {
   if (p === "~") return homedir();
@@ -30,20 +35,23 @@ export function configPath(): string {
   return fromEnv ? expandHome(fromEnv) : resolve(process.cwd(), "servers.json");
 }
 
+function readConfig(): unknown {
+  const path = configPath();
+  const raw = readFileSync(path, "utf8");
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    throw new Error(`配置文件 ${path} 不是合法 JSON：${(e as Error).message}`);
+  }
+}
+
 /**
  * 每次调用都从磁盘重新读取配置——配置文件就是唯一事实来源。
  * 这样新增服务器后无需重启 MCP 服务器。读取或校验失败时抛错，由调用方处理。
  */
 export function loadServers(): Map<string, ServerConfig> {
+  const parsed = readConfig();
   const path = configPath();
-  const raw = readFileSync(path, "utf8");
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (e) {
-    throw new Error(`配置文件 ${path} 不是合法 JSON：${(e as Error).message}`);
-  }
 
   const list = (parsed as { servers?: unknown }).servers;
   if (!Array.isArray(list)) {
@@ -61,4 +69,63 @@ export function loadServers(): Map<string, ServerConfig> {
     map.set(item.name, item);
   }
   return map;
+}
+
+/** 读取安全策略配置（如有）。 */
+export function loadSecurity(): SecurityConfig {
+  const parsed = readConfig() as { security?: SecurityConfig };
+  return parsed.security ?? {};
+}
+
+// ---- 命令安全校验 ----
+
+interface BlockRule {
+  regex: RegExp;
+  desc: string;
+}
+
+const BUILTIN_RULES: BlockRule[] = [
+  {
+    // rm -rf /   rm -rf /*   rm -r -f /   rm -fr /   sudo rm -rf /
+    regex: /\brm\b\s+(?:-[a-z]*[rR][^\s]*f[^\s]*|-[a-z]*f[^\s]*[rR][^\s]*|-r\s+-f|-R\s+-f)(?:\s+\S+)*\s+(?:\/\s*\*?\s*$|['"]\/['"]\s*$)/,
+    desc: "rm 递归强制删除根目录",
+  },
+  {
+    // dd if=... of=/dev/sda
+    regex: /\bdd\b\s+.*\bof=\/dev\/(?:sd|hd|nvme|md|vd|xvd|mmcblk|loop|ram)/,
+    desc: "dd 覆盖块设备",
+  },
+  {
+    // mkfs.ext4 /dev/sda1
+    regex: /\bmkfs\.\S+\s+\/dev\/(?:sd|hd|nvme|md|vd|xvd|mmcblk|loop)/,
+    desc: "在块设备上创建文件系统",
+  },
+  {
+    // > /dev/sda  (redirect overwrite)
+    regex: /(?<![|&])\s*>\s*\/dev\/(?:sd|hd|nvme|md|vd|xvd|mmcblk|loop)\b/,
+    desc: "重定向覆盖块设备",
+  },
+  {
+    // fork bomb: :(){ :|:& };:
+    regex: /:\s*\(\s*\)\s*\{/,
+    desc: "疑似 fork 炸弹",
+  },
+];
+
+/**
+ * 校验命令是否命中安全拦截规则。
+ * 返回 null 表示通过；返回字符串则为拦截原因。
+ */
+export function validateCommand(command: string, extraPatterns: string[] = []): string | null {
+  for (const { regex, desc } of BUILTIN_RULES) {
+    if (regex.test(command)) return `内置策略拦截：${desc}`;
+  }
+  for (const p of extraPatterns) {
+    try {
+      if (new RegExp(p).test(command)) return `自定义策略拦截（匹配模式: ${p}）`;
+    } catch {
+      // 用户提供的正则无效，跳过不报错。
+    }
+  }
+  return null;
 }
