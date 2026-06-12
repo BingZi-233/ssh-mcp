@@ -1,0 +1,30 @@
+name: Publish to npm
+
+# 推送 vX.Y.Z 形式的 tag 时自动发布到 npm。
+# 前置条件：在仓库 Secrets 中配置 NPM_TOKEN（npm Automation 类型的 token）。
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write # 用于 npm provenance（来源证明）
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - run: npm ci
+      - run: npm run build
+
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

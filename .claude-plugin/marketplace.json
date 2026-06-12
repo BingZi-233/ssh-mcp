@@ -1,0 +1,17 @@
+{
+  "name": "bingzi-plugins",
+  "owner": {
+    "name": "BingZi-233"
+  },
+  "description": "BingZi-233 的 Claude Code 插件集",
+  "plugins": [
+    {
+      "name": "ssh-mcp",
+      "source": "./plugins/ssh-mcp",
+      "description": "通过 SSH/SFTP 在多台远程服务器上执行命令并传输大文件（支持断点续传）",
+      "homepage": "https://github.com/BingZi-233/ssh-mcp",
+      "license": "MIT",
+      "keywords": ["ssh", "sftp", "remote", "file-transfer"]
+    }
+  ]
+}

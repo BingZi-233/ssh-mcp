@@ -1,7 +1,7 @@
 {
-  "name": "ssh-mcp",
+  "name": "@bingzi-233/ssh-mcp",
   "version": "1.0.0",
-  "description": "通过 SSH 在多台远程服务器上执行命令的 MCP 服务器",
+  "description": "通过 SSH/SFTP 让 AI 在多台远程服务器上执行命令并传输大文件（支持断点续传）的 MCP 服务器",
   "type": "module",
   "bin": {
     "ssh-mcp": "dist/index.js"
@@ -9,10 +9,36 @@
   "files": [
     "dist"
   ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ssh",
+    "sftp",
+    "remote",
+    "file-transfer",
+    "claude"
+  ],
+  "author": "BingZi-233",
+  "license": "MIT",
+  "homepage": "https://github.com/BingZi-233/ssh-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BingZi-233/ssh-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/BingZi-233/ssh-mcp/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
