@@ -3,7 +3,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { configPath, loadServers } from "./config.js";
-import { runCommand } from "./ssh.js";
+import {
+  closeSession,
+  listSessions,
+  openSession,
+  runCommand,
+} from "./ssh.js";
 import {
   cancelTransfer,
   getTransfer,
@@ -105,7 +110,9 @@ server.registerTool(
     description:
       "通过 SSH 在指定的远程服务器上执行一条 shell 命令，返回 stdout、stderr 和退出码。" +
       "用 server 参数指定目标服务器的 name（可先用 list_servers 查看）。" +
-      "注意：每条命令在独立的会话中执行，命令之间不保留工作目录或环境变量；" +
+      "可选传入 session（长连接会话 id）复用已有 TCP 连接，省去重复握手和认证；" +
+      "不传则每次新建连接、执行完即断开（短连接）。" +
+      "注意：即便是长连接，每条命令仍在独立 channel 中执行，命令之间不保留工作目录或环境变量；" +
       "需要保持上下文时请自行串接，例如 `cd /var/www && git pull`。",
     inputSchema: {
       server: z
@@ -118,10 +125,14 @@ server.registerTool(
         .positive()
         .optional()
         .describe(`命令超时时间（毫秒），默认 ${DEFAULT_TIMEOUT_MS}`),
+      session: z
+        .string()
+        .optional()
+        .describe("长连接会话 id（由 open_session 返回）。不填则使用短连接。"),
     },
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
   },
-  async ({ server: serverName, command, timeout_ms }) => {
+  async ({ server: serverName, command, timeout_ms, session }) => {
     let servers;
     try {
       servers = loadServers();
@@ -144,7 +155,7 @@ server.registerTool(
     }
 
     try {
-      const r = await runCommand(cfg, command, timeout_ms ?? DEFAULT_TIMEOUT_MS);
+      const r = await runCommand(cfg, command, timeout_ms ?? DEFAULT_TIMEOUT_MS, session);
       const parts = [
         `服务器: ${cfg.name} (${cfg.username}@${cfg.host}:${cfg.port ?? 22})`,
         `退出码: ${r.code ?? "null"}${r.signal ? `  信号: ${r.signal}` : ""}`,
@@ -159,6 +170,88 @@ server.registerTool(
         isError: true,
       };
     }
+  },
+);
+
+server.registerTool(
+  "open_session",
+  {
+    title: "打开到远程服务器的长连接会话",
+    description:
+      "与指定服务器建立一条持久的 SSH 连接并返回会话 id。该会话可被后续的 run_command " +
+      "通过 session 参数复用，省去重复的 TCP 握手和 SSH 认证开销。" +
+      "注意：即使使用长连接，每次 exec 仍在独立 channel 中执行，命令之间不保留工作目录或环境变量。",
+    inputSchema: {
+      server: z.string().describe("目标服务器的 name（见 list_servers）"),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  },
+  async ({ server: serverName }) => {
+    try {
+      const servers = loadServers();
+      const cfg = servers.get(serverName);
+      if (!cfg) {
+        const names = [...servers.keys()].join(", ") || "（无）";
+        return {
+          content: [{ type: "text", text: `未找到名为 "${serverName}" 的服务器。可用：${names}` }],
+          isError: true,
+        };
+      }
+      const s = await openSession(cfg, 20_000);
+      return { content: [{ type: "text", text: `长连接会话已建立\n  id: ${s.id}\n  服务器: ${s.server}\n  创建时间: ${new Date(s.createdAt).toISOString()}` }] };
+    } catch (e) {
+      return {
+        content: [{ type: "text", text: `打开长连接会话失败：${(e as Error).message}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+server.registerTool(
+  "close_session",
+  {
+    title: "关闭长连接会话",
+    description:
+      "关闭由 open_session 建立的长连接会话，释放底层 SSH 连接。",
+    inputSchema: {
+      session: z.string().describe("要关闭的会话 id（由 open_session 返回）"),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  },
+  async ({ session }) => {
+    const ok = closeSession(session);
+    if (!ok) {
+      return {
+        content: [{ type: "text", text: `会话 ${session} 不存在或已断开。` }],
+        isError: true,
+      };
+    }
+    return { content: [{ type: "text", text: `会话 ${session} 已关闭。` }] };
+  },
+);
+
+server.registerTool(
+  "list_sessions",
+  {
+    title: "列出当前所有长连接会话",
+    description:
+      "列出当前已打开的所有长连接会话的 id、关联服务器和创建时间。",
+    inputSchema: {},
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  async () => {
+    const all = listSessions();
+    const text =
+      all.length > 0
+        ? all
+            .map(
+              (s) =>
+                `  ${s.id} → ${s.server}（${new Date(s.createdAt).toISOString()}）`,
+            )
+            .join("\n")
+        : "当前没有长连接会话。";
+    return { content: [{ type: "text", text }] };
   },
 );
 

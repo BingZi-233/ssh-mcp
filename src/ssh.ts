@@ -11,6 +11,47 @@ export interface CommandResult {
   signal?: string;
 }
 
+/** 长连接会话——复用 TCP 连接，省去重复握手和认证开销。 */
+export interface Session {
+  id: string;
+  server: string;
+  conn: Client;
+  createdAt: number;
+}
+
+const sessions = new Map<string, Session>();
+let sessionCounter = 0;
+
+export async function openSession(server: ServerConfig, timeoutMs: number): Promise<Session> {
+  const conn = await createConnection(server, timeoutMs);
+  const id = `s${++sessionCounter}`;
+  const session: Session = { id, server: server.name, conn, createdAt: Date.now() };
+  sessions.set(id, session);
+  conn.on("close", () => sessions.delete(id));
+  conn.on("error", () => sessions.delete(id));
+  return { id: session.id, server: session.server, createdAt: session.createdAt } as Session;
+}
+
+export function getSession(id: string): Session | undefined {
+  return sessions.get(id);
+}
+
+export function closeSession(id: string): boolean {
+  const session = sessions.get(id);
+  if (!session) return false;
+  session.conn.end();
+  sessions.delete(id);
+  return true;
+}
+
+export function listSessions(): Session[] {
+  return [...sessions.values()].map((s) => ({
+    id: s.id,
+    server: s.server,
+    createdAt: s.createdAt,
+  })) as Session[];
+}
+
 /** 根据服务器配置组装 ssh2 的连接参数，挑选鉴权方式。 */
 export function buildConnectConfig(server: ServerConfig, readyTimeoutMs: number): ConnectConfig {
   const conf: ConnectConfig = {
@@ -67,15 +108,30 @@ export function createConnection(server: ServerConfig, readyTimeoutMs: number): 
 /**
  * 在指定服务器上执行一条命令，收集 stdout/stderr/退出码后返回。
  *
- * 设计取舍：每次调用建立一条独立连接，执行完即断开。SSH 的 exec channel 本就
- * 无状态，命令之间不会保留工作目录或环境变量——需要时请用 `cd x && cmd` 自行串接。
+ * 短连接模式（默认）：每次调用建立一条独立连接，执行完即断开。
+ * 长连接模式（传入 sessionId）：复用已有 TCP 连接，省去重复握手和认证，
+ *   但注意每次 exec 仍在独立 channel 中执行，命令之间不保留工作目录或环境变量——
+ *   需要时请用 `cd x && cmd` 自行串接。
  */
 export async function runCommand(
   server: ServerConfig,
   command: string,
   timeoutMs: number,
+  sessionId?: string,
 ): Promise<CommandResult> {
-  const conn = await createConnection(server, timeoutMs);
+  let conn: Client;
+  let shouldEnd: boolean;
+
+  if (sessionId) {
+    const session = sessions.get(sessionId);
+    if (!session) throw new Error(`长连接会话 ${sessionId} 不存在或已断开`);
+    conn = session.conn;
+    shouldEnd = false;
+  } else {
+    conn = await createConnection(server, timeoutMs);
+    shouldEnd = true;
+  }
+
   return new Promise((resolve, reject) => {
     let settled = false;
     const finish = (fn: () => void) => {
@@ -83,7 +139,7 @@ export async function runCommand(
       settled = true;
       clearTimeout(timer);
       fn();
-      conn.end();
+      if (shouldEnd) conn.end();
     };
     const timer = setTimeout(() => {
       finish(() => reject(new Error(`命令执行超时（${timeoutMs}ms）`)));
