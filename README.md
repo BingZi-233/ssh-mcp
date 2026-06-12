@@ -2,6 +2,14 @@
 
 一个 MCP 服务器，让 Claude 通过 **SSH** 在多台远程服务器上执行命令、并通过 **SFTP** 传输大文件（支持 40GB+ 与断点续传）。每台服务器配一个 `name`，模型靠 `name` 区分目标机器。
 
+[![NPM](https://img.shields.io/npm/v/@bingzi-233/ssh-mcp?color=CB3837&logo=npm)](https://www.npmjs.com/package/@bingzi-233/ssh-mcp)
+[![Node](https://img.shields.io/node/v/@bingzi-233/ssh-mcp?color=339933&logo=nodedotjs)](https://nodejs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?logo=javascript&logoColor=black)](https://developer.mozilla.org/en-US/docs/Web/JavaScript)
+[![Stars](https://img.shields.io/github/stars/BingZi-233/ssh-mcp?color=EAC54F&logo=github)](https://github.com/BingZi-233/ssh-mcp/stargazers)
+[![License](https://img.shields.io/github/license/BingZi-233/ssh-mcp?color=4A90D9)](https://github.com/BingZi-233/ssh-mcp/blob/master/LICENSE)
+[![LINUX DO](https://img.shields.io/badge/LINUX_DO-社区认可-4A90D9?logo=discourse&logoColor=white)](https://linux.do)
+
 ## 工具
 
 | 工具 | 作用 |
@@ -107,7 +115,7 @@ claude mcp add ssh -- node /绝对路径/ssh-mcp/dist/index.js
 
 ## 社区
 
-本项目源自 [Linux.do](https://linux.do) 社区。
+本项目由 [LINUX DO](https://linux.do) 社区孵化并认可。
 
 ## License
 
