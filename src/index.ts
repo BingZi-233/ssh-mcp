@@ -111,7 +111,7 @@ function formatTransfer(t: Transfer): string {
 // MCP server setup (--mcp mode)
 // ---------------------------------------------------------------------------
 function createMcpServer(): McpServer {
-  const server = new McpServer({ name: "ssh-mcp", version: "1.5.0" });
+  const server = new McpServer({ name: "ssh-mcp", version: "1.5.1" });
 
   server.registerTool(
     "list_servers",
@@ -1066,7 +1066,7 @@ function die(msg: string): never {
 }
 
 function showHelp(): void {
-  process.stdout.write(`ssh-mcp — SSH/SFTP 远程服务器命令行工具  v1.5.0
+  process.stdout.write(`ssh-mcp — SSH/SFTP 远程服务器命令行工具  v1.5.1
 
 用法:  ssh-mcp <子命令> [选项]
 
