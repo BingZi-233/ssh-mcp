@@ -2,7 +2,7 @@
   "mcpServers": {
     "ssh": {
       "command": "npx",
-      "args": ["-y", "@bingzi-233/ssh-mcp"],
+      "args": ["-y", "@bingzi-233/ssh-mcp", "--mcp"],
       "env": {}
     }
   }

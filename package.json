@@ -1,7 +1,7 @@
 {
   "name": "@bingzi-233/ssh-mcp",
-  "version": "1.2.0",
-  "description": "通过 SSH/SFTP 让 AI 在多台远程服务器上执行命令并传输大文件（支持断点续传）的 MCP 服务器",
+  "version": "1.3.0",
+  "description": "纯命令行 SSH/SFTP 工具：在多台远程服务器上执行命令、传输大文件（断点续传）。支持 CLI 模式和 MCP stdio 模式。",
   "type": "module",
   "bin": {
     "ssh-mcp": "dist/index.js"
@@ -19,13 +19,13 @@
     "prepublishOnly": "npm run build"
   },
   "keywords": [
-    "mcp",
-    "model-context-protocol",
+    "cli",
     "ssh",
     "sftp",
+    "mcp",
+    "model-context-protocol",
     "remote",
-    "file-transfer",
-    "claude"
+    "file-transfer"
   ],
   "author": "BingZi-233",
   "license": "MIT",

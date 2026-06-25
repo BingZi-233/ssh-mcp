@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.3.0] - 2026-06-25
+
+### 变更
+
+- **纯命令行模式**：默认行为改为 CLI 子命令（`ssh-mcp run-command`、`ssh-mcp upload` 等）
+- MCP stdio 模式通过 `--mcp` 标志显式启用，向后兼容
+- 每个子命令支持 `--help` 查看详细用法
+- 新增 Claude Code skill 使用指南（`.claude-plugin/skills/ssh-mcp.md`）
+
 ## [1.2.0] - 2026-06-12
 
 ### 新增
