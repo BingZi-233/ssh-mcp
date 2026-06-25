@@ -160,6 +160,94 @@ ssh-mcp rm -s prod-web -p /tmp/backup --recursive         # 递归删除目录
 ssh-mcp mkdir -s prod-web -p /opt/app/logs --parents      # 创建目录（含父目录）
 ```
 
+### 健康检查
+
+一键收集远程服务器 OS/磁盘/内存/负载/CPU 信息。
+
+```bash
+ssh-mcp health -s prod-web
+```
+
+### SSL 证书检查
+
+通过远程服务器的 openssl 拉取 SSL/TLS 证书信息，解析有效期、指纹、SAN。
+
+```bash
+ssh-mcp cert-info -s prod-web --host example.com
+ssh-mcp cert-info -s prod-web --host 10.0.0.5 --port 8443
+```
+
+### 服务器间直传
+
+两台远程服务器之间 SFTP 直传，数据不经本地中转。
+
+```bash
+ssh-mcp copy-between --src web1 --dst web2 --src-path /opt/app/config.yml --dst-path /opt/app/config.yml
+```
+
+### 配置对比
+
+对比两台服务器上同一文件差异，定位配置漂移。
+
+```bash
+ssh-mcp diff-servers --server-a web1 --server-b web2 --path /etc/nginx/nginx.conf
+```
+
+### 脚本执行
+
+上传本机脚本到远程，执行后自动删除。
+
+```bash
+ssh-mcp exec-script -s prod-web --script ./deploy.sh
+```
+
+### 快照打包
+
+远程目录 tar.gz 流式下载到本机。
+
+```bash
+ssh-mcp snapshot -s prod-web --dir /var/log --output ./logs.tar.gz
+ssh-mcp snapshot -s prod-web --dir /opt/app --output ./backup.tar.gz --exclude "*.log,node_modules"
+```
+
+### 持续追踪 (tail -f)
+
+SFTP 轮询模式追踪远程文件的新增内容。
+
+```bash
+ssh-mcp tail-f -s prod-web -p /var/log/nginx/access.log
+ssh-mcp list-tails
+ssh-mcp stop-tail --id tail1
+```
+
+### 定时监控 (watch)
+
+定时重复执行命令，自动高亮输出变化。
+
+```bash
+ssh-mcp watch -s prod-web --interval 5000 -c "ls -la /tmp"
+ssh-mcp list-watches
+ssh-mcp stop-watch --id w1
+```
+
+### 远程 HTTP 请求
+
+从远程服务器发起 HTTP 请求，获取内网视角。
+
+```bash
+ssh-mcp curl -s prod-web http://localhost:8080/health
+ssh-mcp curl -s prod-web -X POST -H "Content-Type: application/json" -d '{"a":1}' http://api.internal/users
+```
+
+### 环境信息收集
+
+收集远程服务器的环境变量、登录用户、网络端口监听、进程信息。
+
+```bash
+ssh-mcp env -s prod-web
+ssh-mcp env -s prod-web --process nginx
+```
+
 ## 多服务器操作模式
 
 可直接用 `batch` 命令，或用 shell 循环依次执行：

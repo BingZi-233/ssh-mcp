@@ -1,6 +1,6 @@
 # ssh-mcp
 
-纯命令行 SSH/SFTP 工具：在多台远程服务器上执行命令、传输大文件（断点续传）、端口转发、文件管理。支持 CLI 模式和 MCP stdio 模式（`--mcp`）。
+纯命令行 SSH/SFTP 工具：远程执行命令、批量操作、大文件传输（断点续传）、端口转发、健康检查、配置对比、快照打包、tail -f、watch 等 27 个子命令。CLI + MCP 双模式。
 
 [![NPM](https://img.shields.io/npm/v/@bingzi-233/ssh-mcp?color=CB3837&logo=npm)](https://www.npmjs.com/package/@bingzi-233/ssh-mcp)
 [![Node](https://img.shields.io/node/v/@bingzi-233/ssh-mcp?color=339933&logo=nodedotjs)](https://nodejs.org)
@@ -18,7 +18,9 @@ ssh-mcp list-servers                                     # 列出服务器
 ssh-mcp run-command -s prod-web -c "df -h /"             # 执行命令
 ssh-mcp batch --servers web1,web2,web3 -c "uptime"       # 批量执行
 ssh-mcp upload -s prod-web -l ./dist.tar.gz -r /tmp/     # 上传文件
+ssh-mcp health -s prod-web                               # 健康检查
 ssh-mcp ls -s prod-web -p /var/log                       # 列出目录
+ssh-mcp tail-f -s prod-web -p /var/log/app.log           # 追尾日志
 ssh-mcp forward -s prod-web -L 8080:192.168.1.5:80       # 端口转发
 ```
 
@@ -35,6 +37,16 @@ ssh-mcp forward -s prod-web -L 8080:192.168.1.5:80       # 端口转发
 | `forward` / `list-forwards` / `close-forward` | SSH 端口转发（本地/远程） |
 | `ls` / `stat` | 列出远程目录、查看文件信息 |
 | `rm` / `mkdir` | 删除远程文件/目录、创建远程目录 |
+| `health` | 一键健康检查（OS/磁盘/内存/负载/CPU） |
+| `cert-info` | 查看 SSL/TLS 证书信息 |
+| `copy-between` | 服务器间直传文件（不经本地中转） |
+| `diff-servers` | 对比两台服务器同一文件差异 |
+| `exec-script` | 上传脚本执行并自动清理 |
+| `snapshot` | 远程目录 tar.gz 打包下载 |
+| `tail-f` / `stop-tail` / `list-tails` | 持续追踪远程文件（SFTP） |
+| `watch` / `stop-watch` / `list-watches` | 定时重复执行命令并高亮差异 |
+| `curl` | 从远程服务器发起 HTTP 请求 |
+| `env` | 收集远程服务器环境信息 |
 
 每个子命令运行 `ssh-mcp <子命令> --help` 查看详细用法。
 

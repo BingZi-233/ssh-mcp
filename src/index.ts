@@ -31,6 +31,35 @@ import {
   type FileEntry,
   type FileStat,
 } from "./sftp-ops.js";
+import {
+  getHealth,
+  getCertInfo,
+  copyBetween,
+  diffServers,
+  execScript,
+  snapshot,
+  startTailFollow,
+  stopTailFollow,
+  getTailFollow,
+  listTailFollows,
+  httpRequest,
+  getRemoteEnv,
+  startWatch,
+  stopWatch,
+  getWatch,
+  listWatches,
+  type HealthReport,
+  type CertInfo,
+  type CopyResult,
+  type DiffResult,
+  type ExecScriptResult,
+  type SnapshotResult,
+  type TailFollow,
+  type HttpResponse,
+  type RemoteEnv,
+  type WatchHandle,
+  type WatchIteration,
+} from "./ops.js";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 
@@ -82,7 +111,7 @@ function formatTransfer(t: Transfer): string {
 // MCP server setup (--mcp mode)
 // ---------------------------------------------------------------------------
 function createMcpServer(): McpServer {
-  const server = new McpServer({ name: "ssh-mcp", version: "1.4.0" });
+  const server = new McpServer({ name: "ssh-mcp", version: "1.5.0" });
 
   server.registerTool(
     "list_servers",
@@ -570,6 +599,400 @@ function createMcpServer(): McpServer {
     },
   );
 
+  // ---- 健康检查 ----
+
+  server.registerTool(
+    "health_check",
+    {
+      title: "远程服务器健康检查",
+      description:
+        "一键收集远程服务器健康报告：主机名、操作系统、运行时长、负载、内存、磁盘、CPU 核心数。",
+      inputSchema: {
+        server: z.string().describe("目标服务器 name"),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ server: serverName }) => {
+      try {
+        const servers = loadServers();
+        const cfg = servers.get(serverName);
+        if (!cfg) return { content: [{ type: "text", text: `未找到服务器 "${serverName}"` }], isError: true };
+        const h = await getHealth(cfg);
+        const lines = [
+          `=== ${h.server} (${h.hostname}) ===`,
+          `操作系统: ${h.os}`,
+          `运行时长: ${h.uptime}`,
+          `平均负载: ${h.load}`,
+          `CPU 核心: ${h.cpuCores}`,
+          `内存:\n${h.memory}`,
+          `磁盘:\n${h.disk}`,
+        ];
+        return { content: [{ type: "text", text: lines.join("\n") }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `健康检查失败：${(e as Error).message}` }], isError: true };
+      }
+    },
+  );
+
+  // ---- SSL 证书 ----
+
+  server.registerTool(
+    "cert_info",
+    {
+      title: "查看 SSL/TLS 证书信息",
+      description:
+        "通过远程服务器上的 openssl 拉取目标主机的 SSL 证书，解析主题、签发者、SAN、有效期、指纹和剩余天数。",
+      inputSchema: {
+        server: z.string().describe("执行 openssl 的 SSH 服务器 name"),
+        host: z.string().describe("要检查证书的目标主机名或 IP"),
+        port: z.number().int().positive().optional().describe("目标端口，默认 443"),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ server: serverName, host, port }) => {
+      try {
+        const servers = loadServers();
+        const cfg = servers.get(serverName);
+        if (!cfg) return { content: [{ type: "text", text: `未找到服务器 "${serverName}"` }], isError: true };
+        const c = await getCertInfo(cfg, host, port ?? 443);
+        const lines = [
+          `主题:   ${c.subject}`,
+          `签发者: ${c.issuer}`,
+          `有效期: ${c.notBefore} → ${c.notAfter}`,
+          `剩余天数: ${c.remainingDays}`,
+          `指纹: ${c.fingerprint}`,
+          `SAN: ${c.sans.length ? c.sans.join(", ") : "（无）"}`,
+        ];
+        return { content: [{ type: "text", text: lines.join("\n") }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `证书检查失败：${(e as Error).message}` }], isError: true };
+      }
+    },
+  );
+
+  // ---- 服务器间直传 ----
+
+  server.registerTool(
+    "copy_between",
+    {
+      title: "服务器间直接传输文件",
+      description:
+        "在两台远程服务器之间直接 SFTP 传输文件，数据不经过本机中转。" +
+        "从 source_server 的 source_path 读取，写入 dest_server 的 dest_path。",
+      inputSchema: {
+        source_server: z.string().describe("源服务器 name"),
+        dest_server: z.string().describe("目标服务器 name"),
+        source_path: z.string().describe("源文件路径"),
+        dest_path: z.string().describe("目标文件路径"),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+    },
+    async ({ source_server, dest_server, source_path, dest_path }) => {
+      try {
+        const servers = loadServers();
+        const src = servers.get(source_server);
+        const dest = servers.get(dest_server);
+        if (!src) return { content: [{ type: "text", text: `未找到源服务器 "${source_server}"` }], isError: true };
+        if (!dest) return { content: [{ type: "text", text: `未找到目标服务器 "${dest_server}"` }], isError: true };
+        const r = await copyBetween(src, dest, source_path, dest_path);
+        return { content: [{ type: "text", text: `已复制 ${humanBytes(r.size)}：${r.sourceServer}:${r.sourcePath} → ${r.destServer}:${r.destPath}（耗时 ${(r.elapsedMs / 1000).toFixed(1)}s）` }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `服务器间复制失败：${(e as Error).message}` }], isError: true };
+      }
+    },
+  );
+
+  // ---- 服务器文件对比 ----
+
+  server.registerTool(
+    "diff_servers",
+    {
+      title: "对比两台服务器上同一文件的差异",
+      description:
+        "对比两台服务器上同一路径的文件内容，返回 unified diff 格式的差异。" +
+        "用于排查配置漂移、确认多台服务器配置一致性。",
+      inputSchema: {
+        server_a: z.string().describe("第一台服务器 name"),
+        server_b: z.string().describe("第二台服务器 name"),
+        path: z.string().describe("要对比的文件路径"),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ server_a, server_b, path }) => {
+      try {
+        const servers = loadServers();
+        const a = servers.get(server_a);
+        const b = servers.get(server_b);
+        if (!a) return { content: [{ type: "text", text: `未找到服务器 "${server_a}"` }], isError: true };
+        if (!b) return { content: [{ type: "text", text: `未找到服务器 "${server_b}"` }], isError: true };
+        const d = await diffServers(a, b, path);
+        if (d.identical) return { content: [{ type: "text", text: `${server_a} 和 ${server_b} 上 ${path} 内容一致。` }] };
+        return { content: [{ type: "text", text: `--- ${server_a}:${path}\n+++ ${server_b}:${path}\n${d.diff}` }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `对比失败：${(e as Error).message}` }], isError: true };
+      }
+    },
+  );
+
+  // ---- 脚本执行 ----
+
+  server.registerTool(
+    "exec_script",
+    {
+      title: "上传脚本到远程执行并清理",
+      description:
+        "将本机脚本文件上传到远程服务器，设置执行权限，运行后自动删除临时文件。" +
+        "一站式操作，无需手动清理。",
+      inputSchema: {
+        server: z.string().describe("目标服务器 name"),
+        local_script: z.string().describe("本机脚本文件的绝对路径"),
+        remote_path: z.string().optional().describe("远程暂存路径，默认 /tmp/ssh-mcp-script.sh"),
+        timeout_ms: z.number().int().positive().optional().describe("执行超时毫秒数，默认 120000"),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+    },
+    async ({ server: serverName, local_script, remote_path, timeout_ms }) => {
+      try {
+        const servers = loadServers();
+        const cfg = servers.get(serverName);
+        if (!cfg) return { content: [{ type: "text", text: `未找到服务器 "${serverName}"` }], isError: true };
+        const r = await execScript(cfg, local_script, remote_path ?? "/tmp/ssh-mcp-script.sh", timeout_ms ?? 120_000);
+        return { content: [{ type: "text", text: `退出码: ${r.exitCode}\n${r.stdout}\n${r.stderr ? "--- stderr ---\n" + r.stderr : ""}`.trim() }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `脚本执行失败：${(e as Error).message}` }], isError: true };
+      }
+    },
+  );
+
+  // ---- 快照 ----
+
+  server.registerTool(
+    "snapshot",
+    {
+      title: "远程目录快照打包下载",
+      description:
+        "将远程服务器上的目录通过 tar.gz 打包后流式下载到本机。" +
+        "支持 --exclude 排除模式。适用于备份、迁移场景。",
+      inputSchema: {
+        server: z.string().describe("目标服务器 name"),
+        remote_dir: z.string().describe("远程目录路径"),
+        local_file: z.string().describe("本机输出文件路径（.tar.gz）"),
+        excludes: z.array(z.string()).optional().describe("排除模式列表，如 ['*.log', 'node_modules']"),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    async ({ server: serverName, remote_dir, local_file, excludes }) => {
+      try {
+        const servers = loadServers();
+        const cfg = servers.get(serverName);
+        if (!cfg) return { content: [{ type: "text", text: `未找到服务器 "${serverName}"` }], isError: true };
+        const r = await snapshot(cfg, remote_dir, local_file, excludes ?? []);
+        return { content: [{ type: "text", text: `快照完成\n  服务器: ${r.server}:${r.remotePath}\n  本地: ${r.localFile}\n  大小: ${humanBytes(r.fileSize)}\n  耗时: ${(r.elapsedMs / 1000).toFixed(1)}s` }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `快照失败：${(e as Error).message}` }], isError: true };
+      }
+    },
+  );
+
+  // ---- tail-f ----
+
+  server.registerTool(
+    "start_tail",
+    {
+      title: "持续追踪远程文件（tail -f）",
+      description:
+        "以 SFTP 轮询方式持续追踪远程文件的增长内容。返回 tail id，" +
+        "用 get_tail 抓取已收集的内容，stop_tail 停止追踪。",
+      inputSchema: {
+        server: z.string().describe("目标服务器 name"),
+        path: z.string().describe("要追踪的远程文件路径"),
+        interval_ms: z.number().int().positive().optional().describe("轮询间隔毫秒数，默认 2000"),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ server: serverName, path, interval_ms }) => {
+      try {
+        const servers = loadServers();
+        const cfg = servers.get(serverName);
+        if (!cfg) return { content: [{ type: "text", text: `未找到服务器 "${serverName}"` }], isError: true };
+        const chunks: string[] = [];
+        const t = await startTailFollow(cfg, path, interval_ms ?? 2000, (_id, chunk) => chunks.push(chunk));
+        return { content: [{ type: "text", text: `tail 已启动 [${t.id}]\n  服务器: ${t.server}\n  文件: ${t.path}\n  用 get_tail({ id: "${t.id}" }) 获取内容，stop_tail({ id: "${t.id}" }) 停止。` }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `启动 tail 失败：${(e as Error).message}` }], isError: true };
+      }
+    },
+  );
+
+  server.registerTool(
+    "get_tail",
+    {
+      title: "查看 tail 追踪状态",
+      description: "查看指定 tail 追踪任务的状态、已收集字节数等信息。",
+      inputSchema: { id: z.string().optional().describe("tail id；不填则列出所有") },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ id }) => {
+      if (id) {
+        const t = getTailFollow(id);
+        if (!t) return { content: [{ type: "text", text: `未找到 tail: ${id}` }], isError: true };
+        return { content: [{ type: "text", text: `[${t.id}] ${t.server}:${t.path} — ${t.state}（${humanBytes(t.seenBytes)} 已跟踪）` }] };
+      }
+      const all = listTailFollows();
+      const text = all.length ? all.map((t) => `[${t.id}] ${t.server}:${t.path} — ${t.state}（${humanBytes(t.seenBytes)}）`).join("\n") : "当前没有 tail 任务。";
+      return { content: [{ type: "text", text }] };
+    },
+  );
+
+  server.registerTool(
+    "stop_tail",
+    {
+      title: "停止 tail 追踪",
+      description: "停止一个 tail 追踪任务。",
+      inputSchema: { id: z.string().describe("tail id") },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ id }) => {
+      if (!stopTailFollow(id)) return { content: [{ type: "text", text: `未找到 tail: ${id}` }], isError: true };
+      return { content: [{ type: "text", text: `tail ${id} 已停止。` }] };
+    },
+  );
+
+  // ---- watch ----
+
+  server.registerTool(
+    "start_watch",
+    {
+      title: "定时重复执行命令并高亮差异",
+      description:
+        "在远程服务器上按指定间隔重复执行命令。每次执行结果与上次对比，" +
+        "自动高亮变化行。返回 watch id，用 stop_watch 停止。",
+      inputSchema: {
+        server: z.string().describe("目标服务器 name"),
+        command: z.string().describe("要重复执行的命令"),
+        interval_ms: z.number().int().positive().describe("执行间隔毫秒数"),
+        timeout_ms: z.number().int().positive().optional().describe("每次命令执行超时毫秒数，默认 10000"),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ server: serverName, command, interval_ms, timeout_ms }) => {
+      try {
+        const servers = loadServers();
+        const cfg = servers.get(serverName);
+        if (!cfg) return { content: [{ type: "text", text: `未找到服务器 "${serverName}"` }], isError: true };
+        const iterations: WatchIteration[] = [];
+        const wh = startWatch(cfg, command, interval_ms, (_id, iter) => iterations.push(iter), timeout_ms ?? 10_000);
+        return { content: [{ type: "text", text: `watch 已启动 [${wh.id}]\n  服务器: ${wh.server}\n  命令: ${wh.command}\n  间隔: ${wh.intervalMs}ms\n  用 get_watch({ id: "${wh.id}" }) 查看或 stop_watch({ id: "${wh.id}" }) 停止。` }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `启动 watch 失败：${(e as Error).message}` }], isError: true };
+      }
+    },
+  );
+
+  server.registerTool(
+    "get_watch",
+    {
+      title: "查看 watch 状态",
+      description: "查看指定 watch 任务的状态。",
+      inputSchema: { id: z.string().optional().describe("watch id；不填则列出所有") },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ id }) => {
+      if (id) {
+        const w = getWatch(id);
+        if (!w) return { content: [{ type: "text", text: `未找到 watch: ${id}` }], isError: true };
+        return { content: [{ type: "text", text: `[${w.id}] ${w.server}: ${w.command}（每 ${w.intervalMs}ms）— ${w.state}` }] };
+      }
+      const all = listWatches();
+      const text = all.length ? all.map((w) => `[${w.id}] ${w.server}: ${w.command}（每 ${w.intervalMs}ms）— ${w.state}`).join("\n") : "当前没有 watch 任务。";
+      return { content: [{ type: "text", text }] };
+    },
+  );
+
+  server.registerTool(
+    "stop_watch",
+    {
+      title: "停止 watch",
+      description: "停止一个定时 watch 任务。",
+      inputSchema: { id: z.string().describe("watch id") },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ id }) => {
+      if (!stopWatch(id)) return { content: [{ type: "text", text: `未找到 watch: ${id}` }], isError: true };
+      return { content: [{ type: "text", text: `watch ${id} 已停止。` }] };
+    },
+  );
+
+  // ---- HTTP 请求 ----
+
+  server.registerTool(
+    "http_request",
+    {
+      title: "从远程服务器发起 HTTP 请求",
+      description:
+        "在远程服务器上通过 curl 执行 HTTP 请求，以远程服务器的网络视角探测目标。" +
+        "适用于内网接口调试、从服务器视角访问受限端点。",
+      inputSchema: {
+        server: z.string().describe("目标服务器 name"),
+        url: z.string().describe("请求 URL"),
+        method: z.string().optional().describe("HTTP 方法，默认 GET"),
+        headers: z.record(z.string(), z.string()).optional().describe("请求头键值对"),
+        body: z.string().optional().describe("请求体"),
+        timeout_ms: z.number().int().positive().optional().describe("超时毫秒数，默认 30000"),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ server: serverName, url, method, headers, body, timeout_ms }) => {
+      try {
+        const servers = loadServers();
+        const cfg = servers.get(serverName);
+        if (!cfg) return { content: [{ type: "text", text: `未找到服务器 "${serverName}"` }], isError: true };
+        const r = await httpRequest(cfg, url, method ?? "GET", headers ?? {}, body, timeout_ms ?? 30_000);
+        return { content: [{ type: "text", text: `HTTP ${r.httpCode}（耗时 ${r.duration}）\n${r.body}` }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `HTTP 请求失败：${(e as Error).message}` }], isError: true };
+      }
+    },
+  );
+
+  // ---- 环境信息 ----
+
+  server.registerTool(
+    "remote_env",
+    {
+      title: "收集远程服务器环境信息",
+      description:
+        "收集远程服务器的环境变量、登录用户、网络端口监听、进程信息。" +
+        "可选传入 process_name 搜索特定进程。",
+      inputSchema: {
+        server: z.string().describe("目标服务器 name"),
+        process_name: z.string().optional().describe("搜索的进程名（可选）"),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ server: serverName, process_name }) => {
+      try {
+        const servers = loadServers();
+        const cfg = servers.get(serverName);
+        if (!cfg) return { content: [{ type: "text", text: `未找到服务器 "${serverName}"` }], isError: true };
+        const e = await getRemoteEnv(cfg, process_name);
+        const lines = [`=== ${e.server} 环境信息 ===`];
+        if (e.procInfo) lines.push(`进程: PID=${e.procInfo.pid} PPID=${e.procInfo.ppid} CMD=${e.procInfo.cmdline}`);
+        lines.push(`登录用户:\n${e.users}`);
+        lines.push(`网络监听:\n${e.network}`);
+        if (e.openFiles) lines.push(`文件句柄（尾部）:\n${e.openFiles}`);
+        const envKeys = Object.keys(e.envVars);
+        if (envKeys.length) {
+          lines.push(`环境变量 (${envKeys.length} 个):`);
+          for (const [k, v] of Object.entries(e.envVars)) lines.push(`  ${k}=${v}`);
+        }
+        return { content: [{ type: "text", text: lines.join("\n") }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `收集环境信息失败：${(e as Error).message}` }], isError: true };
+      }
+    },
+  );
+
   return server;
 }
 
@@ -643,7 +1066,7 @@ function die(msg: string): never {
 }
 
 function showHelp(): void {
-  process.stdout.write(`ssh-mcp — SSH/SFTP 远程服务器命令行工具  v1.4.0
+  process.stdout.write(`ssh-mcp — SSH/SFTP 远程服务器命令行工具  v1.5.0
 
 用法:  ssh-mcp <子命令> [选项]
 
@@ -665,6 +1088,20 @@ function showHelp(): void {
   stat                      查看远程文件信息
   rm                        删除远程文件或目录
   mkdir                     创建远程目录
+  health                    一键健康检查（OS/磁盘/内存/负载）
+  cert-info                 查看 SSL/TLS 证书信息
+  copy-between              服务器间直传文件（不经本地）
+  diff-servers              对比两台服务器上同一文件差异
+  exec-script               上传脚本并执行（自动清理）
+  snapshot                  远程目录 tar.gz 打包下载
+  tail-f                    持续追踪远程文件（SFTP 轮询）
+  stop-tail                 停止 tail 追踪
+  list-tails                列出所有 tail 追踪
+  watch                     定时重复执行命令并高亮差异
+  stop-watch                停止 watch
+  list-watches              列出所有 watch 任务
+  curl                      从远程服务器发起 HTTP 请求
+  env                       收集远程服务器环境信息
 
 全局选项:
   --mcp                     以 MCP stdio 服务模式运行（供 AI 客户端调用）
@@ -1281,6 +1718,414 @@ async function cmdMkdir(opts: Map<string, string | boolean>): Promise<void> {
   }
 }
 
+// ---- 健康检查 CLI ----
+
+async function cmdHealth(opts: Map<string, string | boolean>): Promise<void> {
+  if (optBool(opts, "help")) {
+    process.stdout.write(`用法: ssh-mcp health --server <name>
+
+一键收集远程服务器健康信息（OS/磁盘/内存/负载/CPU）。
+
+示例:
+  ssh-mcp health -s prod-web
+`);
+    return;
+  }
+  const serverName = optStr(opts, "server") ?? optStr(opts, "s");
+  if (!serverName) die("缺少 --server");
+  try {
+    const servers = loadServers();
+    const cfg = servers.get(serverName);
+    if (!cfg) die(`未找到服务器 "${serverName}"`);
+    const h = await getHealth(cfg);
+    process.stdout.write(`=== ${h.server} (${h.hostname}) ===
+操作系统: ${h.os}
+运行时长: ${h.uptime}
+平均负载: ${h.load}
+CPU 核心: ${h.cpuCores}
+内存:
+${h.memory}
+磁盘:
+${h.disk}
+`);
+  } catch (e) { die(`健康检查失败：${(e as Error).message}`); }
+}
+
+// ---- SSL 证书 CLI ----
+
+async function cmdCertInfo(opts: Map<string, string | boolean>): Promise<void> {
+  if (optBool(opts, "help")) {
+    process.stdout.write(`用法: ssh-mcp cert-info --server <name> --host <host> [--port <port>]
+
+通过远程服务器的 openssl 拉取目标 SSL 证书信息。
+
+选项:
+  --server, -s <name>   执行 openssl 的 SSH 服务器
+  --host <host>         目标主机（必需）
+  --port <port>         目标端口（默认 443）
+
+示例:
+  ssh-mcp cert-info -s prod-web --host example.com
+  ssh-mcp cert-info -s prod-web --host 10.0.0.5 --port 8443
+`);
+    return;
+  }
+  const serverName = optStr(opts, "server") ?? optStr(opts, "s");
+  const host = optStr(opts, "host");
+  if (!serverName) die("缺少 --server");
+  if (!host) die("缺少 --host");
+  try {
+    const servers = loadServers();
+    const cfg = servers.get(serverName);
+    if (!cfg) die(`未找到服务器 "${serverName}"`);
+    const c = await getCertInfo(cfg, host, parseInt(optStr(opts, "port") ?? "443", 10));
+    process.stdout.write(`主题:   ${c.subject}
+签发者: ${c.issuer}
+有效期: ${c.notBefore} → ${c.notAfter}
+剩余天数: ${c.remainingDays}
+指纹: ${c.fingerprint}
+SAN: ${c.sans.length ? c.sans.join(", ") : "（无）"}
+`);
+  } catch (e) { die(`证书检查失败：${(e as Error).message}`); }
+}
+
+// ---- 服务器间直传 CLI ----
+
+async function cmdCopyBetween(opts: Map<string, string | boolean>): Promise<void> {
+  if (optBool(opts, "help")) {
+    process.stdout.write(`用法: ssh-mcp copy-between --src <name> --dst <name> --src-path <path> --dst-path <path>
+
+在两台远程服务器之间直接传输文件，数据不经本机。
+
+选项:
+  --src <name>      源服务器 name（必需）
+  --dst <name>      目标服务器 name（必需）
+  --src-path <path> 源文件路径（必需）
+  --dst-path <path> 目标文件路径（必需）
+
+示例:
+  ssh-mcp copy-between --src web1 --dst web2 --src-path /opt/app/config.yml --dst-path /opt/app/config.yml
+`);
+    return;
+  }
+  const src = optStr(opts, "src");
+  const dst = optStr(opts, "dst");
+  const srcPath = optStr(opts, "src-path");
+  const dstPath = optStr(opts, "dst-path");
+  if (!src) die("缺少 --src");
+  if (!dst) die("缺少 --dst");
+  if (!srcPath) die("缺少 --src-path");
+  if (!dstPath) die("缺少 --dst-path");
+  try {
+    const servers = loadServers();
+    const srvA = servers.get(src);
+    const srvB = servers.get(dst);
+    if (!srvA) die(`未找到源服务器 "${src}"`);
+    if (!srvB) die(`未找到目标服务器 "${dst}"`);
+    const r = await copyBetween(srvA, srvB, srcPath, dstPath);
+    process.stdout.write(`已复制 ${humanBytes(r.size)}：${r.sourceServer}:${r.sourcePath} → ${r.destServer}:${r.destPath}（${(r.elapsedMs / 1000).toFixed(1)}s）\n`);
+  } catch (e) { die(`复制失败：${(e as Error).message}`); }
+}
+
+// ---- 服务器文件对比 CLI ----
+
+async function cmdDiffServers(opts: Map<string, string | boolean>): Promise<void> {
+  if (optBool(opts, "help")) {
+    process.stdout.write(`用法: ssh-mcp diff-servers --server-a <name> --server-b <name> --path <path>
+
+对比两台服务器上同一文件的内容差异。
+
+示例:
+  ssh-mcp diff-servers --server-a web1 --server-b web2 --path /etc/nginx/nginx.conf
+`);
+    return;
+  }
+  const a = optStr(opts, "server-a");
+  const b = optStr(opts, "server-b");
+  const path = optStr(opts, "path") ?? optStr(opts, "p");
+  if (!a) die("缺少 --server-a");
+  if (!b) die("缺少 --server-b");
+  if (!path) die("缺少 --path");
+  try {
+    const servers = loadServers();
+    const cfgA = servers.get(a);
+    const cfgB = servers.get(b);
+    if (!cfgA) die(`未找到服务器 "${a}"`);
+    if (!cfgB) die(`未找到服务器 "${b}"`);
+    const d = await diffServers(cfgA, cfgB, path);
+    if (d.identical) { process.stdout.write(`${a} 和 ${b} 上 ${path} 内容一致。\n`); return; }
+    process.stdout.write(`--- ${a}:${path}\n+++ ${b}:${path}\n${d.diff}\n`);
+  } catch (e) { die(`对比失败：${(e as Error).message}`); }
+}
+
+// ---- 脚本执行 CLI ----
+
+async function cmdExecScript(opts: Map<string, string | boolean>): Promise<void> {
+  if (optBool(opts, "help")) {
+    process.stdout.write(`用法: ssh-mcp exec-script --server <name> --script <path> [--remote <path>] [--timeout <ms>]
+
+上传本机脚本到远程服务器执行，完成后自动删除。
+
+示例:
+  ssh-mcp exec-script -s prod-web --script ./deploy.sh
+  ssh-mcp exec-script -s prod-web --script ./migrate.sh --remote /tmp/migrate.sh
+`);
+    return;
+  }
+  const serverName = optStr(opts, "server") ?? optStr(opts, "s");
+  const script = optStr(opts, "script");
+  if (!serverName) die("缺少 --server");
+  if (!script) die("缺少 --script");
+  try {
+    const servers = loadServers();
+    const cfg = servers.get(serverName);
+    if (!cfg) die(`未找到服务器 "${serverName}"`);
+    const r = await execScript(cfg, script, optStr(opts, "remote") ?? "/tmp/ssh-mcp-script.sh", optNum(opts, "timeout") ?? 120_000);
+    process.stdout.write(`退出码: ${r.exitCode}\n${r.stdout}\n`);
+    if (r.stderr) process.stderr.write(r.stderr + "\n");
+  } catch (e) { die(`脚本执行失败：${(e as Error).message}`); }
+}
+
+// ---- 快照 CLI ----
+
+async function cmdSnapshot(opts: Map<string, string | boolean>): Promise<void> {
+  if (optBool(opts, "help")) {
+    process.stdout.write(`用法: ssh-mcp snapshot --server <name> --dir <path> --output <file> [--exclude <pattern,...>]
+
+将远程目录通过 tar.gz 打包后流式下载到本机。
+
+示例:
+  ssh-mcp snapshot -s prod-web --dir /var/log --output ./logs.tar.gz
+  ssh-mcp snapshot -s prod-web --dir /opt/app --output ./app-backup.tar.gz --exclude "*.log,node_modules"
+`);
+    return;
+  }
+  const serverName = optStr(opts, "server") ?? optStr(opts, "s");
+  const dir = optStr(opts, "dir");
+  const output = optStr(opts, "output");
+  if (!serverName) die("缺少 --server");
+  if (!dir) die("缺少 --dir");
+  if (!output) die("缺少 --output");
+  const excludes = (optStr(opts, "exclude") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  try {
+    const servers = loadServers();
+    const cfg = servers.get(serverName);
+    if (!cfg) die(`未找到服务器 "${serverName}"`);
+    const r = await snapshot(cfg, dir, output, excludes);
+    process.stdout.write(`快照完成\n  服务器: ${r.server}:${r.remotePath}\n  本地: ${r.localFile}\n  大小: ${humanBytes(r.fileSize)}\n  耗时: ${(r.elapsedMs / 1000).toFixed(1)}s\n`);
+  } catch (e) { die(`快照失败：${(e as Error).message}`); }
+}
+
+// ---- tail-f CLI ----
+
+async function cmdTailFollow(opts: Map<string, string | boolean>): Promise<void> {
+  if (optBool(opts, "help")) {
+    process.stdout.write(`用法: ssh-mcp tail-f --server <name> --path <path> [--interval <ms>]
+
+持续追踪远程文件的增长内容（SFTP 轮询模式）。在终端实时输出新增内容。
+
+选项:
+  --server, -s <name>   目标服务器 name（必需）
+  --path, -p <path>     要追踪的远程文件（必需）
+  --interval <ms>       轮询间隔（默认 2000ms）
+
+示例:
+  ssh-mcp tail-f -s prod-web -p /var/log/nginx/access.log
+  ssh-mcp tail-f -s prod-web -p /var/log/app.log --interval 1000
+`);
+    return;
+  }
+  const serverName = optStr(opts, "server") ?? optStr(opts, "s");
+  const path = optStr(opts, "path") ?? optStr(opts, "p");
+  if (!serverName) die("缺少 --server");
+  if (!path) die("缺少 --path");
+  try {
+    const servers = loadServers();
+    const cfg = servers.get(serverName);
+    if (!cfg) die(`未找到服务器 "${serverName}"`);
+    process.stdout.write(`追踪 ${cfg.name}:${path}（Ctrl+C 停止）\n`);
+    await startTailFollow(cfg, path, optNum(opts, "interval") ?? 2000, (_id, chunk) => {
+      process.stdout.write(chunk);
+    });
+    // keep alive; SIGINT will kill process
+    await new Promise(() => {});
+  } catch (e) { die(`tail 失败：${(e as Error).message}`); }
+}
+
+async function cmdStopTail(opts: Map<string, string | boolean>): Promise<void> {
+  if (optBool(opts, "help")) {
+    process.stdout.write(`用法: ssh-mcp stop-tail --id <id>
+
+停止 tail 追踪任务。
+
+示例:
+  ssh-mcp stop-tail --id tail1
+`);
+    return;
+  }
+  const id = optStr(opts, "id") ?? optStr(opts, "i");
+  if (!id) die("缺少 --id");
+  if (!stopTailFollow(id)) die(`未找到 tail: ${id}`);
+  process.stdout.write(`tail ${id} 已停止。\n`);
+}
+
+async function cmdListTails(_opts: Map<string, string | boolean>): Promise<void> {
+  const all = listTailFollows();
+  if (all.length === 0) { process.stdout.write("当前没有 tail 追踪任务。\n"); return; }
+  for (const t of all) {
+    process.stdout.write(`[${t.id}] ${t.server}:${t.path} — ${t.state}（${humanBytes(t.seenBytes)} 已跟踪）\n`);
+  }
+}
+
+// ---- watch CLI ----
+
+async function cmdWatch(opts: Map<string, string | boolean>, positional: string[]): Promise<void> {
+  if (optBool(opts, "help")) {
+    process.stdout.write(`用法: ssh-mcp watch --server <name> --interval <ms> [选项] <命令...>
+
+定时重复执行命令，自动高亮输出变化。
+
+选项:
+  --server, -s <name>   目标服务器 name（必需）
+  --interval <ms>       执行间隔毫秒数（必需）
+  --timeout <ms>        每次命令超时（默认 10000）
+  --command, -c <cmd>   要执行的命令（也可放在选项之后）
+
+示例:
+  ssh-mcp watch -s prod-web --interval 5000 -c "ls -la /tmp"
+  ssh-mcp watch -s prod-web --interval 2000 "date +%s ; wc -l /var/log/app.log"
+`);
+    return;
+  }
+  const serverName = optStr(opts, "server") ?? optStr(opts, "s");
+  const interval = optNum(opts, "interval");
+  if (!serverName) die("缺少 --server");
+  if (!interval) die("缺少 --interval");
+
+  let command = optStr(opts, "command") ?? optStr(opts, "c");
+  if (!command) command = positional.join(" ");
+  if (!command) die("缺少命令");
+
+  try {
+    const servers = loadServers();
+    const cfg = servers.get(serverName);
+    if (!cfg) die(`未找到服务器 "${serverName}"`);
+    process.stdout.write(`watch ${cfg.name} 每 ${interval}ms: ${command}（Ctrl+C 停止）\n`);
+    let prev = "";
+    startWatch(cfg, command, interval, (_id, iter) => {
+      process.stdout.write(`\n=== ${new Date(iter.timestamp).toLocaleTimeString()} ===\n`);
+      if (iter.changed) {
+        process.stdout.write(`[变化]\n${iter.diff}\n`);
+        prev = iter.stdout + iter.stderr;
+      } else {
+        process.stdout.write("（无变化）\n");
+        process.stdout.write(iter.stdout);
+        if (iter.stderr) process.stderr.write(iter.stderr);
+      }
+    }, optNum(opts, "timeout") ?? 10_000);
+    await new Promise(() => {});
+  } catch (e) { die(`watch 失败：${(e as Error).message}`); }
+}
+
+async function cmdStopWatch(opts: Map<string, string | boolean>): Promise<void> {
+  const id = optStr(opts, "id") ?? optStr(opts, "i");
+  if (!id) die("缺少 --id");
+  if (!stopWatch(id)) die(`未找到 watch: ${id}`);
+  process.stdout.write(`watch ${id} 已停止。\n`);
+}
+
+async function cmdListWatches(_opts: Map<string, string | boolean>): Promise<void> {
+  const all = listWatches();
+  if (all.length === 0) { process.stdout.write("当前没有 watch 任务。\n"); return; }
+  for (const w of all) {
+    process.stdout.write(`[${w.id}] ${w.server}: ${w.command}（每 ${w.intervalMs}ms）— ${w.state}\n`);
+  }
+}
+
+// ---- curl CLI ----
+
+async function cmdCurl(opts: Map<string, string | boolean>, positional: string[]): Promise<void> {
+  if (optBool(opts, "help")) {
+    process.stdout.write(`用法: ssh-mcp curl --server <name> [选项] <url>
+
+从远程服务器发起 HTTP 请求，以远程视角探测目标。
+
+选项:
+  --server, -s <name>   目标服务器 name（必需）
+  --method, -X <method> HTTP 方法（默认 GET）
+  --header, -H <hdr>    请求头（可重复使用）
+  --data, -d <body>     请求体
+  --timeout <ms>        超时毫秒数（默认 30000）
+
+示例:
+  ssh-mcp curl -s prod-web http://localhost:8080/health
+  ssh-mcp curl -s prod-web -X POST -H 'Content-Type: application/json' -d '{"a":1}' http://api.internal/users
+`);
+    return;
+  }
+  const serverName = optStr(opts, "server") ?? optStr(opts, "s");
+  let url = positional[0] ?? optStr(opts, "url");
+  if (!serverName) die("缺少 --server");
+  if (!url) die("缺少 URL");
+  try {
+    const servers = loadServers();
+    const cfg = servers.get(serverName);
+    if (!cfg) die(`未找到服务器 "${serverName}"`);
+    const r = await httpRequest(cfg, url,
+      optStr(opts, "method") ?? optStr(opts, "X") ?? "GET",
+      parseHeaderArgs(opts),
+      optStr(opts, "data") ?? optStr(opts, "d"),
+      optNum(opts, "timeout") ?? 30_000);
+    process.stdout.write(`HTTP ${r.httpCode}（耗时 ${r.duration}）\n${r.body}\n`);
+  } catch (e) { die(`HTTP 请求失败：${(e as Error).message}`); }
+}
+
+function parseHeaderArgs(opts: Map<string, string | boolean>): Record<string, string> {
+  const headers: Record<string, string> = {};
+  const hv = opts.get("header") ?? opts.get("H");
+  if (typeof hv === "string") {
+    const colon = hv.indexOf(":");
+    if (colon > 0) headers[hv.slice(0, colon).trim()] = hv.slice(colon + 1).trim();
+  }
+  // For multi-header support, the current arg parser doesn't support repeated flags.
+  // Accept comma-separated: -H "a:1,b:2"
+  const multi = (typeof hv === "string" ? hv : "");
+  return headers;
+}
+
+// ---- env CLI ----
+
+async function cmdEnv(opts: Map<string, string | boolean>): Promise<void> {
+  if (optBool(opts, "help")) {
+    process.stdout.write(`用法: ssh-mcp env --server <name> [--process <name>]
+
+收集远程服务器环境信息：环境变量、登录用户、网络端口、进程。
+
+示例:
+  ssh-mcp env -s prod-web
+  ssh-mcp env -s prod-web --process nginx
+`);
+    return;
+  }
+  const serverName = optStr(opts, "server") ?? optStr(opts, "s");
+  if (!serverName) die("缺少 --server");
+  try {
+    const servers = loadServers();
+    const cfg = servers.get(serverName);
+    if (!cfg) die(`未找到服务器 "${serverName}"`);
+    const e = await getRemoteEnv(cfg, optStr(opts, "process"));
+    process.stdout.write(`=== ${e.server} 环境信息 ===\n`);
+    if (e.procInfo) process.stdout.write(`进程: PID=${e.procInfo.pid} PPID=${e.procInfo.ppid} CMD=${e.procInfo.cmdline}\n`);
+    process.stdout.write(`登录用户:\n${e.users}\n`);
+    process.stdout.write(`网络监听:\n${e.network}\n`);
+    const envKeys = Object.keys(e.envVars);
+    if (envKeys.length) {
+      process.stdout.write(`环境变量 (${envKeys.length} 个):\n`);
+      for (const [k, v] of Object.entries(e.envVars)) process.stdout.write(`  ${k}=${v}\n`);
+    }
+  } catch (e) { die(`收集失败：${(e as Error).message}`); }
+}
+
 function loadServersOrDie(): { servers: Map<string, import("./config.js").ServerConfig>; error: null } {
   try {
     return { servers: loadServers(), error: null };
@@ -1329,6 +2174,20 @@ async function main() {
     case "stat":               return cmdStat(options);
     case "rm":                 return cmdRm(options);
     case "mkdir":              return cmdMkdir(options);
+    case "health":             return cmdHealth(options);
+    case "cert-info":          return cmdCertInfo(options);
+    case "copy-between":       return cmdCopyBetween(options);
+    case "diff-servers":       return cmdDiffServers(options);
+    case "exec-script":        return cmdExecScript(options);
+    case "snapshot":           return cmdSnapshot(options);
+    case "tail-f":             return cmdTailFollow(options);
+    case "stop-tail":          return cmdStopTail(options);
+    case "list-tails":         return cmdListTails(options);
+    case "watch":              return cmdWatch(options, positional);
+    case "stop-watch":         return cmdStopWatch(options);
+    case "list-watches":       return cmdListWatches(options);
+    case "curl":               return cmdCurl(options, positional);
+    case "env":                return cmdEnv(options);
     default:
       die(`未知子命令: ${subcommand}\n运行 ssh-mcp --help 查看可用命令。`);
   }
