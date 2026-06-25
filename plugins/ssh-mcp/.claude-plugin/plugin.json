@@ -8,6 +8,5 @@
   "homepage": "https://github.com/BingZi-233/ssh-mcp",
   "repository": "https://github.com/BingZi-233/ssh-mcp",
   "license": "MIT",
-  "keywords": ["ssh", "sftp", "cli", "mcp", "remote", "file-transfer"],
-  "skills": ["ssh-mcp"]
+  "keywords": ["ssh", "sftp", "cli", "mcp", "remote", "file-transfer"]
 }
