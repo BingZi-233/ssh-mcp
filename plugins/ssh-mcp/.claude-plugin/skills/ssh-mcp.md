@@ -116,9 +116,53 @@ ssh-mcp cancel-transfer -i t1
 
 使用 `--force` 跳过所有安全检查（需明确知道自己在做什么）。
 
+### 批量执行
+
+同时对多台服务器执行同一命令，并发执行、汇总结果。
+
+```bash
+ssh-mcp batch --servers web1,web2,web3 -c "systemctl status nginx"
+ssh-mcp batch --servers prod-web,prod-api "df -h /" --force
+```
+
+### 端口转发
+
+打通本地到内网的隧道。本地转发（-L）：本机端口 → SSH 服务器 → 内网目标。远程转发（-R）：SSH 服务器端口 → 回传到本机。
+
+```bash
+# 本地转发：本机 8080 → 经 prod-web → 内网 192.168.1.5:80
+ssh-mcp forward -s prod-web -L 8080:192.168.1.5:80
+
+# 远程转发：prod-web 的 9000 → 本机 localhost:3000
+ssh-mcp forward -s prod-web -R 9000:127.0.0.1:3000
+
+ssh-mcp list-forwards                     # 查看活跃转发
+ssh-mcp close-forward -i f1               # 停止转发
+```
+
+### 文件浏览
+
+通过 SFTP 列出远程目录、查看文件信息，无需执行 shell 命令。
+
+```bash
+ssh-mcp ls -s prod-web -p /var/log              # 简洁列表
+ssh-mcp ls -s prod-web -p /var/www --long       # 详细模式（权限/大小/时间）
+ssh-mcp stat -s prod-web -p /etc/nginx/nginx.conf   # 文件详细信息
+```
+
+### 远程文件操作
+
+通过 SFTP 删除文件和创建目录，比 shell 命令更干净、更安全。
+
+```bash
+ssh-mcp rm -s prod-web -p /tmp/old.log                    # 删除文件
+ssh-mcp rm -s prod-web -p /tmp/backup --recursive         # 递归删除目录
+ssh-mcp mkdir -s prod-web -p /opt/app/logs --parents      # 创建目录（含父目录）
+```
+
 ## 多服务器操作模式
 
-当需要同时在多台服务器上执行命令时，依次调用即可：
+可直接用 `batch` 命令，或用 shell 循环依次执行：
 
 ```bash
 for s in prod-web prod-api prod-worker; do

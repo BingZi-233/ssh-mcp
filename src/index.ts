@@ -16,6 +16,21 @@ import {
   startTransfer,
   type Transfer,
 } from "./transfer.js";
+import {
+  startForward,
+  listForwards,
+  closeForward,
+} from "./forward.js";
+import {
+  listDirectory,
+  statPath,
+  removePath,
+  makeDir,
+  formatLsLong,
+  formatLsShort,
+  type FileEntry,
+  type FileStat,
+} from "./sftp-ops.js";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 
@@ -67,7 +82,7 @@ function formatTransfer(t: Transfer): string {
 // MCP server setup (--mcp mode)
 // ---------------------------------------------------------------------------
 function createMcpServer(): McpServer {
-  const server = new McpServer({ name: "ssh-mcp", version: "1.3.0" });
+  const server = new McpServer({ name: "ssh-mcp", version: "1.4.0" });
 
   server.registerTool(
     "list_servers",
@@ -327,6 +342,234 @@ function createMcpServer(): McpServer {
     },
   );
 
+  // ---- 端口转发 ----
+
+  server.registerTool(
+    "start_forward",
+    {
+      title: "启动 SSH 端口转发",
+      description:
+        "启动一个 SSH 端口转发隧道。本地转发（-L）：将本机端口流量经由 SSH 服务器转发到内网目标。" +
+        "远程转发（-R）：将 SSH 服务器端口流量回传到本机指定地址。" +
+        "返回转发 id，用 list_forwards 查看状态，close_forward 停止。",
+      inputSchema: {
+        server: z.string().describe("目标 SSH 服务器的 name"),
+        type: z.enum(["local", "remote"]).describe("转发类型：local 本地转发，remote 远程转发"),
+        local_host: z.string().default("127.0.0.1").describe("本机绑定地址，默认 127.0.0.1"),
+        local_port: z.number().int().positive().describe("本机端口号"),
+        remote_host: z.string().describe("远端目标地址（local 模式为内网主机，remote 模式为回传目标）"),
+        remote_port: z.number().int().positive().describe("远端端口号"),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    async ({ server: serverName, type, local_host, local_port, remote_host, remote_port }) => {
+      try {
+        const servers = loadServers();
+        const cfg = servers.get(serverName);
+        if (!cfg) return { content: [{ type: "text", text: `未找到服务器 "${serverName}"` }], isError: true };
+        const f = await startForward(cfg, type, local_host, local_port, remote_host, remote_port);
+        const dir = type === "local"
+          ? `${f.localHost}:${f.localPort} → ${f.remoteHost}:${f.remotePort}`
+          : `${f.remoteHost}:${f.remotePort} → ${f.localHost}:${f.localPort}`;
+        return { content: [{ type: "text", text: `转发已启动 [${f.id}] ${dir}\n类型: ${type}\n状态: ${f.state}` }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `启动转发失败：${(e as Error).message}` }], isError: true };
+      }
+    },
+  );
+
+  server.registerTool(
+    "list_forwards",
+    {
+      title: "列出所有端口转发",
+      description: "列出当前活跃的端口转发隧道。",
+      inputSchema: {},
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async () => {
+      const all = listForwards();
+      if (all.length === 0) return { content: [{ type: "text", text: "当前没有端口转发。" }] };
+      const lines = all.map((f) =>
+        f.type === "local"
+          ? `[${f.id}] ${f.server}  ${f.localHost}:${f.localPort} → ${f.remoteHost}:${f.remotePort}  (${f.state})`
+          : `[${f.id}] ${f.server}  ${f.remoteHost}:${f.remotePort} → ${f.localHost}:${f.localPort}  (${f.state})`,
+      );
+      return { content: [{ type: "text", text: lines.join("\n") }] };
+    },
+  );
+
+  server.registerTool(
+    "close_forward",
+    {
+      title: "停止端口转发",
+      description: "停止一个端口转发隧道。",
+      inputSchema: { id: z.string().describe("转发 id") },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    },
+    async ({ id }) => {
+      const ok = closeForward(id);
+      if (!ok) return { content: [{ type: "text", text: `转发 ${id} 不存在或已停止。` }], isError: true };
+      return { content: [{ type: "text", text: `转发 ${id} 已停止。` }] };
+    },
+  );
+
+  // ---- 批量执行 ----
+
+  server.registerTool(
+    "batch_run",
+    {
+      title: "在多台服务器上批量执行命令",
+      description:
+        "同时在多台服务器上执行同一条命令，并发执行、汇总结果。" +
+        "传入 servers 数组指定目标服务器 name 列表。",
+      inputSchema: {
+        servers: z.array(z.string()).describe("目标服务器 name 列表"),
+        command: z.string().describe("要执行的命令"),
+        timeout_ms: z.number().int().positive().optional().describe(`命令超时（毫秒），默认 ${DEFAULT_TIMEOUT_MS}`),
+        force: z.boolean().optional().describe("跳过安全策略检查"),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+    },
+    async ({ servers: serverNames, command, timeout_ms, force }) => {
+      let servers;
+      try { servers = loadServers(); } catch (e) {
+        return { content: [{ type: "text", text: `读取服务器配置失败：${(e as Error).message}` }], isError: true };
+      }
+      const missing = serverNames.filter((n) => !servers.has(n));
+      if (missing.length) return { content: [{ type: "text", text: `未找到服务器：${missing.join(", ")}` }], isError: true };
+      if (!force) {
+        const security = loadSecurity();
+        const blocked = validateCommand(command, security.blocked_patterns ?? []);
+        if (blocked) return { content: [{ type: "text", text: `${blocked}\n使用 force=true 可跳过安全检查。` }], isError: true };
+      }
+      const timeout = timeout_ms ?? DEFAULT_TIMEOUT_MS;
+      const results = await Promise.allSettled(
+        serverNames.map((name) =>
+          runCommand(servers.get(name)!, command, timeout).then((r) => ({ server: name, result: r })),
+        ),
+      );
+      const lines: string[] = [];
+      for (const r of results) {
+        if (r.status === "rejected") {
+          lines.push(`--- ${(r.reason as any)?.server ?? "?"} FAILED ---\n${(r.reason as Error).message}`);
+        } else {
+          const { server: sName, result } = r.value;
+          lines.push(`--- ${sName} (exit ${result.code}) ---`);
+          if (result.stdout) lines.push(result.stdout.trimEnd());
+          if (result.stderr) lines.push(`[stderr]\n${result.stderr.trimEnd()}`);
+        }
+      }
+      return { content: [{ type: "text", text: lines.join("\n") || "（无输出）" }] };
+    },
+  );
+
+  // ---- SFTP 文件操作 ----
+
+  server.registerTool(
+    "list_directory",
+    {
+      title: "列出远程目录内容",
+      description:
+        "通过 SFTP 列出远程服务器上指定目录的文件和子目录。" +
+        "返回文件名、类型、大小、权限、修改时间等信息。",
+      inputSchema: {
+        server: z.string().describe("目标服务器 name"),
+        path: z.string().describe("远程目录路径"),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ server: serverName, path }) => {
+      try {
+        const servers = loadServers();
+        const cfg = servers.get(serverName);
+        if (!cfg) return { content: [{ type: "text", text: `未找到服务器 "${serverName}"` }], isError: true };
+        const entries = await listDirectory(cfg, path);
+        const lines = entries.map(formatLsLong);
+        return { content: [{ type: "text", text: `${path}:\n${lines.join("\n")}` }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `列出目录失败：${(e as Error).message}` }], isError: true };
+      }
+    },
+  );
+
+  server.registerTool(
+    "stat_file",
+    {
+      title: "查看远程文件信息",
+      description: "通过 SFTP stat 查看远程文件的类型、大小、权限、修改时间。",
+      inputSchema: {
+        server: z.string().describe("目标服务器 name"),
+        path: z.string().describe("远程文件路径"),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ server: serverName, path }) => {
+      try {
+        const servers = loadServers();
+        const cfg = servers.get(serverName);
+        if (!cfg) return { content: [{ type: "text", text: `未找到服务器 "${serverName}"` }], isError: true };
+        const s = await statPath(cfg, path);
+        return { content: [{ type: "text", text: JSON.stringify(s, null, 2) }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `stat 失败：${(e as Error).message}` }], isError: true };
+      }
+    },
+  );
+
+  server.registerTool(
+    "remove_file",
+    {
+      title: "删除远程文件或目录",
+      description:
+        "通过 SFTP 删除远程服务器上的文件或目录。" +
+        "删除目录时需传入 recursive=true，将递归删除目录下所有内容。",
+      inputSchema: {
+        server: z.string().describe("目标服务器 name"),
+        path: z.string().describe("远程文件或目录路径"),
+        recursive: z.boolean().optional().describe("递归删除目录；默认 false"),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+    },
+    async ({ server: serverName, path, recursive }) => {
+      try {
+        const servers = loadServers();
+        const cfg = servers.get(serverName);
+        if (!cfg) return { content: [{ type: "text", text: `未找到服务器 "${serverName}"` }], isError: true };
+        await removePath(cfg, path, recursive ?? false);
+        return { content: [{ type: "text", text: `已删除：${path}` }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `删除失败：${(e as Error).message}` }], isError: true };
+      }
+    },
+  );
+
+  server.registerTool(
+    "make_directory",
+    {
+      title: "创建远程目录",
+      description:
+        "通过 SFTP 在远程服务器上创建目录。" +
+        "传入 parents=true 可自动创建父目录（类似 mkdir -p）。",
+      inputSchema: {
+        server: z.string().describe("目标服务器 name"),
+        path: z.string().describe("远程目录路径"),
+        parents: z.boolean().optional().describe("自动创建父目录；默认 false"),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    async ({ server: serverName, path, parents }) => {
+      try {
+        const servers = loadServers();
+        const cfg = servers.get(serverName);
+        if (!cfg) return { content: [{ type: "text", text: `未找到服务器 "${serverName}"` }], isError: true };
+        await makeDir(cfg, path, parents ?? false);
+        return { content: [{ type: "text", text: `已创建目录：${path}` }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `创建目录失败：${(e as Error).message}` }], isError: true };
+      }
+    },
+  );
+
   return server;
 }
 
@@ -400,13 +643,14 @@ function die(msg: string): never {
 }
 
 function showHelp(): void {
-  process.stdout.write(`ssh-mcp — SSH/SFTP 远程服务器命令行工具  v1.2.0
+  process.stdout.write(`ssh-mcp — SSH/SFTP 远程服务器命令行工具  v1.4.0
 
 用法:  ssh-mcp <子命令> [选项]
 
 子命令:
   list-servers              列出所有已配置的服务器
   run-command               在远程服务器上执行命令
+  batch                     在多台服务器上批量执行同一命令
   open-session              打开到远程服务器的长连接会话
   close-session             关闭长连接会话
   list-sessions             列出当前所有长连接会话
@@ -414,6 +658,13 @@ function showHelp(): void {
   download                  从远程服务器下载文件（支持断点续传）
   transfer-status           查看文件传输进度
   cancel-transfer           取消文件传输
+  forward                   启动 SSH 端口转发（本地/远程）
+  list-forwards             列出当前所有端口转发
+  close-forward             停止端口转发
+  ls                        列出远程目录内容
+  stat                      查看远程文件信息
+  rm                        删除远程文件或目录
+  mkdir                     创建远程目录
 
 全局选项:
   --mcp                     以 MCP stdio 服务模式运行（供 AI 客户端调用）
@@ -737,6 +988,299 @@ async function cmdCancelTransfer(opts: Map<string, string | boolean>): Promise<v
   process.stdout.write(`已请求取消：\n${formatTransfer(t)}\n`);
 }
 
+// ---- 端口转发 CLI ----
+
+async function cmdForward(opts: Map<string, string | boolean>): Promise<void> {
+  if (optBool(opts, "help")) {
+    process.stdout.write(`用法: ssh-mcp forward --server <name> -L <本地端口>:<远端主机>:<远端端口>
+       ssh-mcp forward --server <name> -R <远端端口>:<本地主机>:<本地端口>
+
+选项:
+  --server, -s <name>   目标 SSH 服务器 name（必需）
+  -L <lport>:<rhost>:<rport>   本地端口转发
+  -R <rport>:<lhost>:<lport>   远程端口转发
+
+示例:
+  # 本地转发：本机 8080 → 经 prod-web → 内网 192.168.1.5:80
+  ssh-mcp forward -s prod-web -L 8080:192.168.1.5:80
+
+  # 远程转发：prod-web 的 9000 → 回传到本机 localhost:3000
+  ssh-mcp forward -s prod-web -R 9000:127.0.0.1:3000
+`);
+    return;
+  }
+
+  const serverName = optStr(opts, "server") ?? optStr(opts, "s");
+  if (!serverName) die("缺少 --server");
+
+  const lFwd = optStr(opts, "L");
+  const rFwd = optStr(opts, "R");
+  if (!lFwd && !rFwd) die("缺少 -L 或 -R。用法: ssh-mcp forward -s <name> -L lport:rhost:rport");
+  if (lFwd && rFwd) die("不能同时指定 -L 和 -R");
+
+  const raw = (lFwd ?? rFwd)!;
+  const parts = raw.split(":");
+  if (parts.length !== 3) die("转发格式错误：应为 -L lport:rhost:rport 或 -R rport:lhost:lport");
+
+  let type: "local" | "remote";
+  let localHost: string, localPort: number, remoteHost: string, remotePort: number;
+  if (lFwd) {
+    type = "local";
+    localPort = parseInt(parts[0], 10);
+    remoteHost = parts[1];
+    remotePort = parseInt(parts[2], 10);
+    localHost = "127.0.0.1";
+  } else {
+    type = "remote";
+    remotePort = parseInt(parts[0], 10);
+    localHost = parts[1];
+    localPort = parseInt(parts[2], 10);
+    remoteHost = "0.0.0.0";
+  }
+  if (isNaN(localPort) || isNaN(remotePort)) die("端口号必须是数字");
+
+  try {
+    const servers = loadServers();
+    const cfg = servers.get(serverName);
+    if (!cfg) die(`未找到服务器 "${serverName}"。可用：${[...servers.keys()].join(", ") || "（无）"}`);
+    const f = await startForward(cfg, type, localHost, localPort, remoteHost, remotePort);
+    const dir = type === "local"
+      ? `${f.localHost}:${f.localPort} → ${f.remoteHost}:${f.remotePort}`
+      : `${f.remoteHost}:${f.remotePort} → ${f.localHost}:${f.localPort}`;
+    process.stdout.write(`转发已启动 [${f.id}] ${dir}\n`);
+  } catch (e) {
+    die(`启动转发失败：${(e as Error).message}`);
+  }
+}
+
+async function cmdListForwards(opts: Map<string, string | boolean>): Promise<void> {
+  if (optBool(opts, "help")) {
+    process.stdout.write(`用法: ssh-mcp list-forwards
+
+列出当前所有活跃的端口转发隧道。
+
+示例:
+  ssh-mcp list-forwards
+`);
+    return;
+  }
+  const all = listForwards();
+  if (all.length === 0) { process.stdout.write("当前没有端口转发。\n"); return; }
+  for (const f of all) {
+    const dir = f.type === "local"
+      ? `${f.localHost}:${f.localPort} → ${f.remoteHost}:${f.remotePort}`
+      : `${f.remoteHost}:${f.remotePort} → ${f.localHost}:${f.localPort}`;
+    process.stdout.write(`[${f.id}] ${f.server.padEnd(16)} ${dir.padEnd(32)} ${f.state}\n`);
+  }
+}
+
+async function cmdCloseForward(opts: Map<string, string | boolean>): Promise<void> {
+  if (optBool(opts, "help")) {
+    process.stdout.write(`用法: ssh-mcp close-forward --id <id>
+
+选项:
+  --id, -i <id>   要停止的转发 id（必需）
+
+示例:
+  ssh-mcp close-forward -i f1
+`);
+    return;
+  }
+  const id = optStr(opts, "id") ?? optStr(opts, "i");
+  if (!id) die("缺少 --id");
+  if (!closeForward(id)) die(`转发 ${id} 不存在或已停止。`);
+  process.stdout.write(`转发 ${id} 已停止。\n`);
+}
+
+// ---- 批量执行 CLI ----
+
+async function cmdBatch(opts: Map<string, string | boolean>, positional: string[]): Promise<void> {
+  if (optBool(opts, "help")) {
+    process.stdout.write(`用法: ssh-mcp batch --servers <s1,s2,...> [选项] <命令...>
+
+选项:
+  --servers <names>     目标服务器 name 列表，逗号分隔（必需）
+  --timeout <ms>        命令超时毫秒数（默认 ${DEFAULT_TIMEOUT_MS}）
+  --force               跳过安全策略检查
+  --command, -c <cmd>   要执行的命令（也可直接放在选项之后）
+
+示例:
+  ssh-mcp batch --servers prod-web,prod-api -c "df -h /"
+  ssh-mcp batch --servers web1,web2,web3 "systemctl status nginx"
+`);
+    return;
+  }
+
+  const serversArg = optStr(opts, "servers");
+  if (!serversArg) die("缺少 --servers。用法: ssh-mcp batch --servers s1,s2,... <命令>");
+
+  let command = optStr(opts, "command") ?? optStr(opts, "c");
+  if (!command) command = positional.join(" ");
+  if (!command || command.trim() === "") die("缺少命令");
+
+  const serverNames = serversArg.split(",").map((s) => s.trim()).filter(Boolean);
+  if (serverNames.length === 0) die("--servers 格式错误");
+
+  const timeout = optNum(opts, "timeout") ?? DEFAULT_TIMEOUT_MS;
+  const force = optBool(opts, "force");
+
+  let servers;
+  try { servers = loadServers(); } catch (e) { die(`读取配置失败：${(e as Error).message}`); }
+  const missing = serverNames.filter((n) => !servers.has(n));
+  if (missing.length) die(`未找到服务器：${missing.join(", ")}`);
+
+  if (!force) {
+    const security = loadSecurity();
+    const blocked = validateCommand(command, security.blocked_patterns ?? []);
+    if (blocked) die(blocked + "\n使用 --force 可跳过安全检查。");
+  }
+
+  const results = await Promise.allSettled(
+    serverNames.map((name) =>
+      runCommand(servers.get(name)!, command, timeout).then((r) => ({ server: name, result: r })),
+    ),
+  );
+
+  for (const r of results) {
+    if (r.status === "rejected") {
+      process.stderr.write(`=== ${(r.reason as any)?.server ?? "?"} FAILED ===\n${(r.reason as Error).message}\n`);
+    } else {
+      const { server: sName, result } = r.value;
+      process.stdout.write(`=== ${sName} (exit ${result.code}) ===\n`);
+      if (result.stdout) process.stdout.write(result.stdout.trimEnd() + "\n");
+      if (result.stderr) process.stderr.write(`[stderr]\n${result.stderr.trimEnd()}\n`);
+    }
+  }
+}
+
+// ---- SFTP 文件操作 CLI ----
+
+async function cmdLs(opts: Map<string, string | boolean>): Promise<void> {
+  if (optBool(opts, "help")) {
+    process.stdout.write(`用法: ssh-mcp ls --server <name> --path <path> [--long]
+
+选项:
+  --server, -s <name>   目标服务器 name（必需）
+  --path, -p <path>     远程目录路径（必需）
+  --long, -l            详细列表模式（权限/大小/时间）
+
+示例:
+  ssh-mcp ls -s prod-web -p /var/log
+  ssh-mcp ls -s prod-web -p /tmp --long
+`);
+    return;
+  }
+  const serverName = optStr(opts, "server") ?? optStr(opts, "s");
+  const path = optStr(opts, "path") ?? optStr(opts, "p");
+  if (!serverName) die("缺少 --server");
+  if (!path) die("缺少 --path");
+
+  try {
+    const servers = loadServers();
+    const cfg = servers.get(serverName);
+    if (!cfg) die(`未找到服务器 "${serverName}"`);
+    const entries = await listDirectory(cfg, path);
+    process.stdout.write(`${path}:\n`);
+    const long = optBool(opts, "long") || optBool(opts, "l");
+    for (const e of entries) {
+      process.stdout.write((long ? formatLsLong(e) : formatLsShort(e)) + "\n");
+    }
+    process.stdout.write(`\n${entries.length} 条\n`);
+  } catch (e) {
+    die(`列出目录失败：${(e as Error).message}`);
+  }
+}
+
+async function cmdStat(opts: Map<string, string | boolean>): Promise<void> {
+  if (optBool(opts, "help")) {
+    process.stdout.write(`用法: ssh-mcp stat --server <name> --path <path>
+
+选项:
+  --server, -s <name>   目标服务器 name（必需）
+  --path, -p <path>     远程文件路径（必需）
+
+示例:
+  ssh-mcp stat -s prod-web -p /etc/nginx/nginx.conf
+`);
+    return;
+  }
+  const serverName = optStr(opts, "server") ?? optStr(opts, "s");
+  const path = optStr(opts, "path") ?? optStr(opts, "p");
+  if (!serverName) die("缺少 --server");
+  if (!path) die("缺少 --path");
+
+  try {
+    const servers = loadServers();
+    const cfg = servers.get(serverName);
+    if (!cfg) die(`未找到服务器 "${serverName}"`);
+    const s = await statPath(cfg, path);
+    process.stdout.write(`类型: ${s.type}\n大小: ${s.size}\n权限: ${s.mode.toString(8)}\nuid: ${s.uid}\ngid: ${s.gid}\n修改: ${new Date(s.mtime * 1000).toISOString()}\n`);
+  } catch (e) {
+    die(`stat 失败：${(e as Error).message}`);
+  }
+}
+
+async function cmdRm(opts: Map<string, string | boolean>): Promise<void> {
+  if (optBool(opts, "help")) {
+    process.stdout.write(`用法: ssh-mcp rm --server <name> --path <path> [--recursive]
+
+选项:
+  --server, -s <name>   目标服务器 name（必需）
+  --path, -p <path>     要删除的远程文件或目录（必需）
+  --recursive, -r       递归删除目录
+
+示例:
+  ssh-mcp rm -s prod-web -p /tmp/old.log
+  ssh-mcp rm -s prod-web -p /tmp/backup --recursive
+`);
+    return;
+  }
+  const serverName = optStr(opts, "server") ?? optStr(opts, "s");
+  const path = optStr(opts, "path") ?? optStr(opts, "p");
+  if (!serverName) die("缺少 --server");
+  if (!path) die("缺少 --path");
+
+  try {
+    const servers = loadServers();
+    const cfg = servers.get(serverName);
+    if (!cfg) die(`未找到服务器 "${serverName}"`);
+    await removePath(cfg, path, optBool(opts, "recursive") || optBool(opts, "r"));
+    process.stdout.write(`已删除：${path}\n`);
+  } catch (e) {
+    die(`删除失败：${(e as Error).message}`);
+  }
+}
+
+async function cmdMkdir(opts: Map<string, string | boolean>): Promise<void> {
+  if (optBool(opts, "help")) {
+    process.stdout.write(`用法: ssh-mcp mkdir --server <name> --path <path> [--parents]
+
+选项:
+  --server, -s <name>   目标服务器 name（必需）
+  --path, -p <path>     要创建的远程目录路径（必需）
+  --parents             自动创建父目录（类似 mkdir -p）
+
+示例:
+  ssh-mcp mkdir -s prod-web -p /opt/app/logs --parents
+`);
+    return;
+  }
+  const serverName = optStr(opts, "server") ?? optStr(opts, "s");
+  const path = optStr(opts, "path") ?? optStr(opts, "p");
+  if (!serverName) die("缺少 --server");
+  if (!path) die("缺少 --path");
+
+  try {
+    const servers = loadServers();
+    const cfg = servers.get(serverName);
+    if (!cfg) die(`未找到服务器 "${serverName}"`);
+    await makeDir(cfg, path, optBool(opts, "parents"));
+    process.stdout.write(`已创建目录：${path}\n`);
+  } catch (e) {
+    die(`创建目录失败：${(e as Error).message}`);
+  }
+}
+
 function loadServersOrDie(): { servers: Map<string, import("./config.js").ServerConfig>; error: null } {
   try {
     return { servers: loadServers(), error: null };
@@ -770,6 +1314,7 @@ async function main() {
     }
     case "list-servers":       return cmdListServers(options);
     case "run-command":        return cmdRunCommand(options, positional);
+    case "batch":              return cmdBatch(options, positional);
     case "open-session":       return cmdOpenSession(options);
     case "close-session":      return cmdCloseSession(options);
     case "list-sessions":      return cmdListSessions(options);
@@ -777,6 +1322,13 @@ async function main() {
     case "download":           return cmdDownload(options);
     case "transfer-status":    return cmdTransferStatus(options);
     case "cancel-transfer":    return cmdCancelTransfer(options);
+    case "forward":            return cmdForward(options);
+    case "list-forwards":      return cmdListForwards(options);
+    case "close-forward":      return cmdCloseForward(options);
+    case "ls":                 return cmdLs(options);
+    case "stat":               return cmdStat(options);
+    case "rm":                 return cmdRm(options);
+    case "mkdir":              return cmdMkdir(options);
     default:
       die(`未知子命令: ${subcommand}\n运行 ssh-mcp --help 查看可用命令。`);
   }

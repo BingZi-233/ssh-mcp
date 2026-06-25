@@ -1,6 +1,6 @@
 # ssh-mcp
 
-纯命令行 SSH/SFTP 工具：在多台远程服务器上执行命令、传输大文件（断点续传）。支持 CLI 模式和 MCP stdio 模式（`--mcp`）。
+纯命令行 SSH/SFTP 工具：在多台远程服务器上执行命令、传输大文件（断点续传）、端口转发、文件管理。支持 CLI 模式和 MCP stdio 模式（`--mcp`）。
 
 [![NPM](https://img.shields.io/npm/v/@bingzi-233/ssh-mcp?color=CB3837&logo=npm)](https://www.npmjs.com/package/@bingzi-233/ssh-mcp)
 [![Node](https://img.shields.io/node/v/@bingzi-233/ssh-mcp?color=339933&logo=nodedotjs)](https://nodejs.org)
@@ -12,26 +12,14 @@
 ## CLI 快速上手
 
 ```bash
-# 安装
 npm i -g @bingzi-233/ssh-mcp
 
-# 查看帮助
-ssh-mcp --help
-
-# 列出服务器
-ssh-mcp list-servers
-
-# 执行远程命令
-ssh-mcp run-command -s prod-web -c "df -h /"
-
-# 上传文件（支持断点续传）
-ssh-mcp upload -s prod-web -l ./dist.tar.gz -r /tmp/dist.tar.gz
-
-# 下载文件
-ssh-mcp download -s prod-web -r /var/log/app.log -l ./logs/app.log
-
-# 传输进度
-ssh-mcp transfer-status
+ssh-mcp list-servers                                     # 列出服务器
+ssh-mcp run-command -s prod-web -c "df -h /"             # 执行命令
+ssh-mcp batch --servers web1,web2,web3 -c "uptime"       # 批量执行
+ssh-mcp upload -s prod-web -l ./dist.tar.gz -r /tmp/     # 上传文件
+ssh-mcp ls -s prod-web -p /var/log                       # 列出目录
+ssh-mcp forward -s prod-web -L 8080:192.168.1.5:80       # 端口转发
 ```
 
 ## 命令一览
@@ -40,13 +28,13 @@ ssh-mcp transfer-status
 |---|---|
 | `list-servers` | 列出所有已配置的服务器 |
 | `run-command` | 在远程服务器上执行命令 |
-| `open-session` | 打开长连接会话（复用 TCP 连接） |
-| `close-session` | 关闭长连接会话 |
-| `list-sessions` | 列出当前所有长连接会话 |
-| `upload` | 上传文件到远程（后台任务，断点续传） |
-| `download` | 从远程下载文件（后台任务，断点续传） |
-| `transfer-status` | 查看传输进度 |
-| `cancel-transfer` | 取消传输 |
+| `batch` | 在多台服务器上批量执行同一命令 |
+| `open-session` / `close-session` / `list-sessions` | 长连接会话管理 |
+| `upload` / `download` | 大文件传输（后台任务，断点续传） |
+| `transfer-status` / `cancel-transfer` | 传输进度与取消 |
+| `forward` / `list-forwards` / `close-forward` | SSH 端口转发（本地/远程） |
+| `ls` / `stat` | 列出远程目录、查看文件信息 |
+| `rm` / `mkdir` | 删除远程文件/目录、创建远程目录 |
 
 每个子命令运行 `ssh-mcp <子命令> --help` 查看详细用法。
 
@@ -56,24 +44,15 @@ ssh-mcp transfer-status
 
 ```json
 {
-  "security": {
-    "blocked_patterns": []
-  },
+  "security": { "blocked_patterns": [] },
   "servers": [
     {
       "name": "prod-web",
-      "description": "生产环境 Web 服务器",
+      "description": "生产环境",
       "host": "192.168.1.10",
       "port": 22,
       "username": "deploy",
       "privateKeyPath": "~/.ssh/id_rsa"
-    },
-    {
-      "name": "db",
-      "description": "数据库服务器",
-      "host": "db.example.com",
-      "username": "admin",
-      "password": "your-password"
     }
   ]
 }
@@ -81,16 +60,24 @@ ssh-mcp transfer-status
 
 鉴权优先级：私钥 → 密码 → ssh-agent。修改配置无需重启。
 
-## 长连接会话
+## 端口转发
 
 ```bash
-SID=$(ssh-mcp open-session -s prod-web)
-ssh-mcp run-command -s prod-web --session $SID -c "hostname"
-ssh-mcp run-command -s prod-web --session $SID -c "uptime"
-ssh-mcp close-session -s $SID
+# 本地转发：本机 8080 → 经 SSH 服务器 → 内网 192.168.1.5:80
+ssh-mcp forward -s prod-web -L 8080:192.168.1.5:80
+
+# 远程转发：SSH 服务器 9000 → 回传到本机 localhost:3000
+ssh-mcp forward -s prod-web -R 9000:127.0.0.1:3000
+
+ssh-mcp list-forwards
+ssh-mcp close-forward -i f1
 ```
 
-复用 TCP 连接，省去重复握手和认证。注意每条命令仍在独立 channel 中执行，不保留工作目录。
+## 批量执行
+
+```bash
+ssh-mcp batch --servers prod-web,prod-api,prod-worker -c "systemctl status nginx"
+```
 
 ## 安全策略
 
@@ -101,10 +88,7 @@ ssh-mcp close-session -s $SID
 以 MCP stdio 服务运行（供 Claude Code 等 AI 客户端调用）：
 
 ```bash
-# 手动注册
 claude mcp add ssh -- npx -y @bingzi-233/ssh-mcp --mcp
-
-# 或通过插件安装
 /plugin marketplace add BingZi-233/ssh-mcp
 /plugin install ssh-mcp@bingzi-plugins
 ```

@@ -1,6 +1,6 @@
 {
   "name": "@bingzi-233/ssh-mcp",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "纯命令行 SSH/SFTP 工具：在多台远程服务器上执行命令、传输大文件（断点续传）。支持 CLI 模式和 MCP stdio 模式。",
   "type": "module",
   "bin": {

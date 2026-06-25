@@ -8,7 +8,7 @@
     {
       "name": "ssh-mcp",
       "source": "./plugins/ssh-mcp",
-      "description": "纯命令行 SSH/SFTP 工具：在多台远程服务器上执行命令、传输大文件（断点续传，CLI + MCP 双模式）",
+      "description": "纯命令行 SSH/SFTP 工具：远程执行命令、批量操作、大文件传输（断点续传）、端口转发、文件管理。CLI + MCP 双模式。",
       "homepage": "https://github.com/BingZi-233/ssh-mcp",
       "license": "MIT",
       "keywords": ["ssh", "sftp", "remote", "file-transfer"]
