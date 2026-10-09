@@ -1,0 +1,20 @@
+{
+  "name": "bingzi-plugins",
+  "interface": {
+    "displayName": "BingZi-233 Codex Plugins"
+  },
+  "plugins": [
+    {
+      "name": "ssh-mcp",
+      "source": {
+        "source": "local",
+        "path": "./plugins/ssh-mcp"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

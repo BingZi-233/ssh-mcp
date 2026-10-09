@@ -97,13 +97,22 @@ ssh-mcp batch --servers prod-web,prod-api,prod-worker -c "systemctl status nginx
 
 ## MCP 模式
 
-以 MCP stdio 服务运行（供 Claude Code 等 AI 客户端调用）：
+以 MCP stdio 服务运行（供 Claude Code、Codex 等 AI 客户端调用）：
 
 ```bash
 claude mcp add ssh -- npx -y @bingzi-233/ssh-mcp --mcp
 /plugin marketplace add BingZi-233/ssh-mcp
 /plugin install ssh-mcp@bingzi-plugins
 ```
+
+Codex 从仓库内的 `.agents/plugins/marketplace.json` 发现插件：
+
+```bash
+codex plugin marketplace add BingZi-233/ssh-mcp
+codex plugin add ssh-mcp@bingzi-plugins
+```
+
+Codex 插件目录位于 `plugins/ssh-mcp`，其中的 `.codex-plugin/plugin.json`、`.mcp.json` 和 `skills/` 与 Claude 插件配置共用同一套 npm MCP 服务。
 
 ## 社区
 

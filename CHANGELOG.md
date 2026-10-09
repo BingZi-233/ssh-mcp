@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.1] - 2026-10-08
+
+### 新增
+
+- 添加 Codex 仓库插件市场清单（`.agents/plugins/marketplace.json`）
+- 添加 Codex 插件兼容清单和 `skills/` 技能目录，继续保留 Claude 插件市场支持
+
 ## [1.5.0] - 2026-06-25
 
 ### 新增
