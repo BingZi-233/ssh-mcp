@@ -2,7 +2,9 @@
 
 [![npm](https://img.shields.io/npm/v/@bingzi-233/ssh-mcp?color=CB3837&logo=npm)](https://www.npmjs.com/package/@bingzi-233/ssh-mcp)
 [![Node.js](https://img.shields.io/node/v/@bingzi-233/ssh-mcp?color=339933&logo=nodedotjs)](https://nodejs.org)
+[![GitHub stars](https://img.shields.io/github/stars/BingZi-233/ssh-mcp?color=EAC54F&logo=github)](https://github.com/BingZi-233/ssh-mcp/stargazers)
 [![License](https://img.shields.io/github/license/BingZi-233/ssh-mcp)](LICENSE)
+[![LINUX DO](https://img.shields.io/badge/LINUX_DO-%E7%A4%BE%E5%8C%BA%E8%AE%A4%E5%8F%AF-4A90D9?logo=discourse&logoColor=white)](https://linux.do)
 
 用一个 CLI 管理多台 SSH 服务器：执行命令、批量操作、SFTP 传输、端口转发、健康检查，并可作为 MCP stdio 服务接入 Claude Code、Codex 等客户端。
 
@@ -190,6 +192,8 @@ codex plugin marketplace add BingZi-233/ssh-mcp
 codex plugin add ssh-mcp@bingzi-plugins
 ```
 
+Codex 插件目录位于 [`plugins/ssh-mcp`](plugins/ssh-mcp)，其中的 `.codex-plugin/plugin.json`、`.mcp.json` 和 `skills/` 与 Claude 插件配置共用同一套 npm MCP 服务。
+
 MCP 客户端启动前，请确保工作目录中存在 `servers.json`，或在客户端配置中设置 `SSH_MCP_CONFIG`。可用工具会从配置文件动态读取服务器列表。
 
 ## 开发与验证
@@ -229,3 +233,7 @@ ssh-mcp --help
 ## 许可证
 
 MIT © BingZi-233
+
+## 社区
+
+本项目由 [LINUX DO](https://linux.do) 社区孵化并认可。
