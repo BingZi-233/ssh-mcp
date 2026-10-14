@@ -85,7 +85,7 @@ export async function startForward(
     conn.on("tcp connection", (info, accept) => {
       const stream = accept();
       const sock = new Socket();
-      sock.connect(remotePort, localHost, () => {
+      sock.connect(localPort, localHost, () => {
         sock.pipe(stream).pipe(sock);
         stream.on("error", () => sock.destroy());
         sock.on("error", () => stream.destroy());
