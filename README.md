@@ -1,123 +1,231 @@
 # ssh-mcp
 
-纯命令行 SSH/SFTP 工具：远程执行命令、批量操作、大文件传输（断点续传）、端口转发、健康检查、配置对比、快照打包、tail -f、watch 等 27 个子命令。CLI + MCP 双模式。
+[![npm](https://img.shields.io/npm/v/@bingzi-233/ssh-mcp?color=CB3837&logo=npm)](https://www.npmjs.com/package/@bingzi-233/ssh-mcp)
+[![Node.js](https://img.shields.io/node/v/@bingzi-233/ssh-mcp?color=339933&logo=nodedotjs)](https://nodejs.org)
+[![License](https://img.shields.io/github/license/BingZi-233/ssh-mcp)](LICENSE)
 
-[![NPM](https://img.shields.io/npm/v/@bingzi-233/ssh-mcp?color=CB3837&logo=npm)](https://www.npmjs.com/package/@bingzi-233/ssh-mcp)
-[![Node](https://img.shields.io/node/v/@bingzi-233/ssh-mcp?color=339933&logo=nodedotjs)](https://nodejs.org)
-[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
-[![Stars](https://img.shields.io/github/stars/BingZi-233/ssh-mcp?color=EAC54F&logo=github)](https://github.com/BingZi-233/ssh-mcp/stargazers)
-[![License](https://img.shields.io/github/license/BingZi-233/ssh-mcp?color=4A90D9)](https://github.com/BingZi-233/ssh-mcp/blob/master/LICENSE)
-[![LINUX DO](https://img.shields.io/badge/LINUX_DO-社区认可-4A90D9?logo=discourse&logoColor=white)](https://linux.do)
+用一个 CLI 管理多台 SSH 服务器：执行命令、批量操作、SFTP 传输、端口转发、健康检查，并可作为 MCP stdio 服务接入 Claude Code、Codex 等客户端。
 
-## CLI 快速上手
+> 当前版本：**1.5.2** · Node.js **18+** · MIT
+
+## 适合什么场景
+
+- 日常登录多台服务器，快速执行命令并保留清晰的退出码和输出。
+- 上传或下载大文件，任务在后台运行并支持断点续传。
+- 从跳板机访问内网 HTTP 服务或数据库端口。
+- 让 MCP 客户端在明确的服务器配置和安全策略下执行运维动作。
+
+## 安装
 
 ```bash
-npm i -g @bingzi-233/ssh-mcp
-
-ssh-mcp list-servers                                     # 列出服务器
-ssh-mcp run-command -s prod-web -c "df -h /"             # 执行命令
-ssh-mcp batch --servers web1,web2,web3 -c "uptime"       # 批量执行
-ssh-mcp upload -s prod-web -l ./dist.tar.gz -r /tmp/     # 上传文件
-ssh-mcp health -s prod-web                               # 健康检查
-ssh-mcp ls -s prod-web -p /var/log                       # 列出目录
-ssh-mcp tail-f -s prod-web -p /var/log/app.log           # 追尾日志
-ssh-mcp forward -s prod-web -L 8080:192.168.1.5:80       # 端口转发
+npm install -g @bingzi-233/ssh-mcp
+ssh-mcp --help
 ```
 
-## 命令一览
+从源码安装：
 
-| 子命令 | 用途 |
-|---|---|
-| `list-servers` | 列出所有已配置的服务器 |
-| `run-command` | 在远程服务器上执行命令 |
-| `batch` | 在多台服务器上批量执行同一命令 |
-| `open-session` / `close-session` / `list-sessions` | 长连接会话管理 |
-| `upload` / `download` | 大文件传输（后台任务，断点续传） |
-| `transfer-status` / `cancel-transfer` | 传输进度与取消 |
-| `forward` / `list-forwards` / `close-forward` | SSH 端口转发（本地/远程） |
-| `ls` / `stat` | 列出远程目录、查看文件信息 |
-| `rm` / `mkdir` | 删除远程文件/目录、创建远程目录 |
-| `health` | 一键健康检查（OS/磁盘/内存/负载/CPU） |
-| `cert-info` | 查看 SSL/TLS 证书信息 |
-| `copy-between` | 服务器间直传文件（不经本地中转） |
-| `diff-servers` | 对比两台服务器同一文件差异 |
-| `exec-script` | 上传脚本执行并自动清理 |
-| `snapshot` | 远程目录 tar.gz 打包下载 |
-| `tail-f` / `stop-tail` / `list-tails` | 持续追踪远程文件（SFTP） |
-| `watch` / `stop-watch` / `list-watches` | 定时重复执行命令并高亮差异 |
-| `curl` | 从远程服务器发起 HTTP 请求 |
-| `env` | 收集远程服务器环境信息 |
+```bash
+git clone https://github.com/BingZi-233/ssh-mcp.git
+cd ssh-mcp
+npm ci
+npm run build
+npm link
+```
 
-每个子命令运行 `ssh-mcp <子命令> --help` 查看详细用法。
+## 配置服务器
 
-## 配置 servers.json
-
-默认从运行目录下 `./servers.json` 读取，或设置环境变量 `SSH_MCP_CONFIG`。
+默认读取当前工作目录的 `servers.json`，也可以用 `SSH_MCP_CONFIG` 指定路径。配置每次调用都会重新读取，修改后不需要重启进程。
 
 ```json
 {
-  "security": { "blocked_patterns": [] },
+  "security": {
+    "blocked_patterns": ["shutdown\\s+-h", "reboot"]
+  },
   "servers": [
     {
       "name": "prod-web",
-      "description": "生产环境",
+      "description": "生产 Web",
       "host": "192.168.1.10",
       "port": 22,
       "username": "deploy",
-      "privateKeyPath": "~/.ssh/id_rsa"
+      "privateKeyPath": "~/.ssh/id_ed25519"
+    },
+    {
+      "name": "staging",
+      "host": "staging.example.com",
+      "username": "deploy",
+      "password": "仅供本地测试使用"
     }
   ]
 }
 ```
 
-鉴权优先级：私钥 → 密码 → ssh-agent。修改配置无需重启。
-
-## 端口转发
+复制示例配置：
 
 ```bash
-# 本地转发：本机 8080 → 经 SSH 服务器 → 内网 192.168.1.5:80
+cp servers.example.json servers.json
+export SSH_MCP_CONFIG="$PWD/servers.json"
+```
+
+认证优先级为：私钥 → 密码 → `SSH_AUTH_SOCK` 中的 ssh-agent。不要把真实密码或私钥提交到 Git；`servers.json` 默认已被 `.gitignore` 排除。
+
+## CLI 快速开始
+
+```bash
+ssh-mcp list-servers
+ssh-mcp run-command -s prod-web -c "hostname && uptime"
+ssh-mcp batch --servers prod-web,staging -c "df -h /"
+ssh-mcp health -s prod-web
+```
+
+每个命令都有独立帮助：
+
+```bash
+ssh-mcp <命令> --help
+```
+
+### 命令总览
+
+| 命令 | 用途 |
+|---|---|
+| `list-servers` | 列出配置的服务器 |
+| `run-command` | 执行远程 shell 命令 |
+| `batch` | 并发执行批量命令 |
+| `open-session` / `close-session` / `list-sessions` | 管理可复用 SSH 长连接 |
+| `upload` / `download` | SFTP 后台传输与断点续传 |
+| `transfer-status` / `cancel-transfer` | 查看或取消传输任务 |
+| `forward` / `list-forwards` / `close-forward` | 本地或远程 SSH 端口转发 |
+| `ls` / `stat` / `rm` / `mkdir` | SFTP 浏览和文件操作 |
+| `health` | OS、磁盘、内存、负载和 CPU 检查 |
+| `cert-info` | 检查远程 SSL/TLS 证书 |
+| `copy-between` | 两台远程服务器之间直传 |
+| `diff-servers` | 对比两台服务器的同一路径 |
+| `exec-script` | 上传、执行并清理脚本 |
+| `snapshot` | 将远程目录打包下载为 tar.gz |
+| `tail-f` / `stop-tail` / `list-tails` | 轮询追踪远程文件 |
+| `watch` / `stop-watch` / `list-watches` | 定时执行命令并显示变化 |
+| `curl` | 从远程网络环境发起 HTTP 请求 |
+| `env` | 收集远程环境信息 |
+
+## 常用操作
+
+### 长连接会话
+
+长连接只复用 TCP 和认证；每条命令仍在独立 channel 中执行，不会保留 `cd` 或环境变量。
+
+```bash
+ssh-mcp open-session -s prod-web
+# 从输出中取得 s1
+ssh-mcp run-command -s prod-web --session s1 -c "hostname"
+ssh-mcp close-session -i s1
+```
+
+### 文件传输与续传
+
+目标文件已有部分内容时，默认从目标大小处继续；使用 `--overwrite` 从头开始。
+
+```bash
+ssh-mcp upload -s prod-web -l ./release.tar.gz -r /tmp/
+ssh-mcp transfer-status
+ssh-mcp download -s prod-web -r /var/log/app.log -l ./logs/ --overwrite
+ssh-mcp cancel-transfer -i t1
+```
+
+### 端口转发
+
+```bash
+# 本机 8080 → SSH 服务器 → 内网 192.168.1.5:80
 ssh-mcp forward -s prod-web -L 8080:192.168.1.5:80
 
-# 远程转发：SSH 服务器 9000 → 回传到本机 localhost:3000
+# SSH 服务器 9000 → 本机 localhost:3000
 ssh-mcp forward -s prod-web -R 9000:127.0.0.1:3000
 
 ssh-mcp list-forwards
 ssh-mcp close-forward -i f1
 ```
 
-## 批量执行
+### 服务器间直传和配置对比
 
 ```bash
-ssh-mcp batch --servers prod-web,prod-api,prod-worker -c "systemctl status nginx"
+ssh-mcp copy-between --src web1 --dst web2 \
+  --src-path /opt/app/config.yml --dst-path /opt/app/config.yml
+
+ssh-mcp diff-servers --server-a web1 --server-b web2 \
+  --path /etc/nginx/nginx.conf
 ```
 
 ## 安全策略
 
-内置拦截高危命令：`rm -rf /`、`dd` 写块设备、`mkfs`、fork 炸弹。在 `servers.json` 的 `security.blocked_patterns` 中追加自定义正则。传 `--force` 跳过检查。
+`run-command` 默认拦截以下高危模式：
+
+- `rm -rf /`、`rm -rf /*` 等根目录递归删除
+- `dd` 覆盖块设备
+- `mkfs.*` 在块设备上创建文件系统
+- 重定向覆盖块设备
+- fork bomb
+
+可以在 `security.blocked_patterns` 中追加正则。`--force` 会跳过内置和自定义检查，只应在确认目标和命令后使用。安全策略是最后一道保护，仍应使用最小权限账号、SSH key 和服务器侧审计。
 
 ## MCP 模式
 
-以 MCP stdio 服务运行（供 Claude Code、Codex 等 AI 客户端调用）：
+以 stdio MCP 服务启动：
+
+```bash
+npx -y @bingzi-233/ssh-mcp --mcp
+```
+
+Claude Code：
 
 ```bash
 claude mcp add ssh -- npx -y @bingzi-233/ssh-mcp --mcp
-/plugin marketplace add BingZi-233/ssh-mcp
-/plugin install ssh-mcp@bingzi-plugins
 ```
 
-Codex 从仓库内的 `.agents/plugins/marketplace.json` 发现插件：
+本仓库也包含 Claude/Codex 插件清单：
 
 ```bash
+/plugin marketplace add BingZi-233/ssh-mcp
+/plugin install ssh-mcp@bingzi-plugins
+
 codex plugin marketplace add BingZi-233/ssh-mcp
 codex plugin add ssh-mcp@bingzi-plugins
 ```
 
-Codex 插件目录位于 `plugins/ssh-mcp`，其中的 `.codex-plugin/plugin.json`、`.mcp.json` 和 `skills/` 与 Claude 插件配置共用同一套 npm MCP 服务。
+MCP 客户端启动前，请确保工作目录中存在 `servers.json`，或在客户端配置中设置 `SSH_MCP_CONFIG`。可用工具会从配置文件动态读取服务器列表。
 
-## 社区
+## 开发与验证
 
-本项目由 [LINUX DO](https://linux.do) 社区孵化并认可。
+```bash
+npm ci
+npm run build
+npm audit --omit=dev
+npm run dev
+```
 
-## License
+发布流程：推送 `v*` 标签后，GitHub Actions 会构建并发布 npm 包。发布前请确认版本号、CHANGELOG、`npm run build` 和安全审计均通过。
+
+## 排障
+
+**找不到服务器配置**
+
+确认当前目录有 `servers.json`，或检查：
+
+```bash
+echo "$SSH_MCP_CONFIG"
+ssh-mcp --help
+```
+
+**认证失败**
+
+确认 `username`、私钥路径和私钥口令；私钥支持 `~` 展开。也可以先运行 `ssh -v` 验证系统 SSH 凭据。
+
+**传输没有结束**
+
+传输是后台任务，使用 `transfer-status` 查看状态。若目标文件大小超过源文件，使用 `--overwrite` 重新开始。
+
+**MCP 客户端看不到工具**
+
+确认启动参数包含 `--mcp`，配置文件路径可读，并从客户端日志检查 stdio 进程是否正常启动。
+
+## 许可证
 
 MIT © BingZi-233
