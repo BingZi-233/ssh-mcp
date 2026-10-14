@@ -1,14 +1,31 @@
 # ssh-mcp
 
+> 面向多服务器运维的 SSH / SFTP CLI 与 MCP 服务。
+>
+> 用一份可审计的服务器配置，完成远程命令、文件传输、端口转发和基础健康检查。
+
 [![npm](https://img.shields.io/npm/v/@bingzi-233/ssh-mcp?color=CB3837&logo=npm)](https://www.npmjs.com/package/@bingzi-233/ssh-mcp)
 [![Node.js](https://img.shields.io/node/v/@bingzi-233/ssh-mcp?color=339933&logo=nodedotjs)](https://nodejs.org)
 [![GitHub stars](https://img.shields.io/github/stars/BingZi-233/ssh-mcp?color=EAC54F&logo=github)](https://github.com/BingZi-233/ssh-mcp/stargazers)
 [![License](https://img.shields.io/github/license/BingZi-233/ssh-mcp)](LICENSE)
 [![LINUX DO](https://img.shields.io/badge/LINUX_DO-%E7%A4%BE%E5%8C%BA%E8%AE%A4%E5%8F%AF-4A90D9?logo=discourse&logoColor=white)](https://linux.do)
 
-用一个 CLI 管理多台 SSH 服务器：执行命令、批量操作、SFTP 传输、端口转发、健康检查，并可作为 MCP stdio 服务接入 Claude Code、Codex 等客户端。
+ssh-mcp 把日常 SSH 操作收敛成一个可脚本化的命令行工具，也可以作为 MCP stdio 服务接入 Claude Code、Codex 等客户端。它不替代服务器权限系统：连接使用现有 SSH 凭据，命令仍在目标服务器上执行，安全拦截只作为额外保护层。
 
 > 当前版本：**1.5.2** · Node.js **18+** · MIT
+
+**[安装](#安装)** · **[5 分钟上手](#5-分钟上手)** · **[配置](#配置服务器)** · **[命令参考](#命令总览)** · **[MCP 接入](#mcp-模式)**
+
+## 核心能力
+
+| 能力 | 说明 |
+|---|---|
+| 远程执行 | 单台或批量执行命令，保留 stdout、stderr 和退出码 |
+| 文件传输 | SFTP 后台任务、进度轮询、取消和断点续传 |
+| 网络通道 | 本地转发和远程转发，访问内网 HTTP 或 TCP 服务 |
+| 运行检查 | 健康检查、证书信息、环境信息、远程 HTTP 请求 |
+| 配置运维 | 服务器间直传、配置对比、目录快照、脚本执行 |
+| AI 接入 | MCP stdio 服务和 Claude/Codex 插件清单 |
 
 ## 适合什么场景
 
@@ -32,6 +49,23 @@ cd ssh-mcp
 npm ci
 npm run build
 npm link
+```
+
+## 5 分钟上手
+
+```bash
+cp servers.example.json servers.json
+$EDITOR servers.json
+
+ssh-mcp list-servers
+ssh-mcp run-command -s prod-web -c "hostname && uptime"
+ssh-mcp health -s prod-web
+```
+
+如果配置文件不在当前目录：
+
+```bash
+SSH_MCP_CONFIG=~/.config/ssh-mcp/servers.json ssh-mcp list-servers
 ```
 
 ## 配置服务器
